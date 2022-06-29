@@ -1,6 +1,5 @@
 require('dotenv').config();
 const crypto = require('crypto');
-const currencyjs = require('currency.js');
 
 const axios = require('axios');
 const i_axios = axios.create({
