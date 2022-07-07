@@ -169,13 +169,8 @@ async function postOrder({
   })
   .then(res => {
     const { body, statusCode } = res;
-    if (errorHandler && statusCode !== 200) errorHandler();
-    else {
-      body.json().then(data => {
-        if (statusCode !== 200) handleError(data);
-        else callback();
-      });
-    }
+    if (statusCode === 200) callback();
+    else body.json().then(errorHandler ?? handleError);
   });
 }
 
