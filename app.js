@@ -66,7 +66,7 @@ client.on('message', msg => {
       prefQty = Math.floor( USD_TRADE_QTY / oAsk * 10000 ) / 10000;
 
       const execQty = Math.min( askQty, oBidQty, prefQty );
-      executeArbitrage(s, ask, oppositeSymbol, oBid, execQty);
+      executeArbitrage(s, ask, oppositeSymbol, ask + TARGET_DELTA, execQty);
     } 
     else {
       const
@@ -75,7 +75,7 @@ client.on('message', msg => {
       prefQty = Math.floor( USD_TRADE_QTY / ask * 10000 ) / 10000;
 
       const execQty = Math.min( oAskQty, bidQty, prefQty );
-      executeArbitrage(oppositeSymbol, oAsk, s, bid, execQty);
+      executeArbitrage(oppositeSymbol, oAsk, s, oAsk + TARGET_DELTA, execQty);
     }
   }
   
@@ -97,10 +97,11 @@ function executeArbitrage(buySymbol, buyPrice, sellSymbol, sellPrice, quantity) 
     symbol: buySymbol,
     price: buyPrice,
     quantity,
-    callback: sellCb
+    callback: () => {
+      sellCb();
+      console.log(`${new Date().toISOString()} > Buy ${buySymbol} @ ${buyPrice}. Sell ${sellSymbol} @ ${sellPrice}. Q: ${quantity}`);
+    }
   });
-
-  console.log(`${new Date().toISOString()} > Buy ${buySymbol} @ ${buyPrice}. Sell ${sellSymbol} @ ${sellPrice}. Q: ${quantity}`);
 }
 
 /**
@@ -184,6 +185,6 @@ async function postOrder({
  * @param {*} e 
  */
 function handleError(data) {
-  console.log(`${new Date().toLocaleString()}: Error! msg: ${ data.msg }`);
+  console.log(`${new Date().toISOString()} > Error! msg: ${ JSON.stringify(data) }`);
   LOCK_LOOP = false;
 }
