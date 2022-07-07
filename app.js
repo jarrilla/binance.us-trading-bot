@@ -5,7 +5,7 @@ const { request } = require('undici');
 
 // The minimum delta to look for between market 1's lowest ask and market 2's highest bid.
 // If we spot a window with this delta, execute an arbitrage.
-const TARGET_DELTA = +0.15;
+const TARGET_DELTA = +0.25;
 
 // The amount to trade
 // Use a fixed quantity to avoid exponential growth
@@ -66,7 +66,7 @@ client.on('message', msg => {
       prefQty = Math.floor( USD_TRADE_QTY / oAsk * 10000 ) / 10000;
 
       const execQty = Math.min( askQty, oBidQty, prefQty );
-      executeArbitrage(s, ask, oppositeSymbol, ask + TARGET_DELTA, execQty);
+      executeArbitrage(s, ask, oppositeSymbol, (ask + TARGET_DELTA).toFixed(2), execQty);
     } 
     else {
       const
@@ -75,7 +75,7 @@ client.on('message', msg => {
       prefQty = Math.floor( USD_TRADE_QTY / ask * 10000 ) / 10000;
 
       const execQty = Math.min( oAskQty, bidQty, prefQty );
-      executeArbitrage(oppositeSymbol, oAsk, s, oAsk + TARGET_DELTA, execQty);
+      executeArbitrage(oppositeSymbol, oAsk, s, (oAsk + TARGET_DELTA).toFixed(2), execQty);
     }
   }
   
@@ -97,11 +97,10 @@ function executeArbitrage(buySymbol, buyPrice, sellSymbol, sellPrice, quantity) 
     symbol: buySymbol,
     price: buyPrice,
     quantity,
-    callback: () => {
-      sellCb();
-      console.log(`${new Date().toISOString()} > Buy ${buySymbol} @ ${buyPrice}. Sell ${sellSymbol} @ ${sellPrice}. Q: ${quantity}`);
-    }
+    callback: sellCb
   });
+
+  console.log(`${new Date().toISOString()} > Buy ${buySymbol} @ ${buyPrice}. Sell ${sellSymbol} @ ${sellPrice}. Q: ${quantity}`);
 }
 
 /**
@@ -185,6 +184,8 @@ async function postOrder({
  * @param {*} e 
  */
 function handleError(data) {
-  console.log(`${new Date().toISOString()} > Error! msg: ${ JSON.stringify(data) }`);
+  if (data.code == -1013) return;
+
+  console.log(`${new Date().toISOString()} > Error! msg: ${ data.msg }`);
   LOCK_LOOP = false;
 }
