@@ -184,8 +184,9 @@ async function postOrder({
  * @param {*} e 
  */
 function handleError(data) {
+  LOCK_LOOP = false;
+
   if (data.code == -1013) return;
 
   console.log(`${new Date().toISOString()} > Error! msg: ${ data.msg }`);
-  LOCK_LOOP = false;
 }
