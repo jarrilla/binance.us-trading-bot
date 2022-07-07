@@ -12,6 +12,6 @@
     "dotenv": "^16.0.1"
   },
   "scripts": {
-    "run": "node app.js"
+    "start": "node app.js"
   }
 }
