@@ -5,14 +5,14 @@ const { request } = require('undici');
 
 // The minimum delta to look for between market 1's lowest ask and market 2's highest bid.
 // If we spot a window with this delta, execute an arbitrage.
-const TARGET_DELTA = +0.25;
+const TARGET_DELTA = +0.15;
 
 // The amount to trade
 // Use a fixed quantity to avoid exponential growth
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 175;
+const RECV_WINDOW_MS = 75;
 
 // If a sell order fails to post; try again after a short delay
 const RETRY_SELL_INTERVAL_MS = 250;
