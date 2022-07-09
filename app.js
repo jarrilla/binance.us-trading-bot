@@ -66,7 +66,8 @@ client.on('message', msg => {
       prefQty = Math.floor( USD_TRADE_QTY / oAsk * 10000 ) / 10000;
 
       const execQty = Math.min( askQty, oBidQty, prefQty );
-      executeArbitrage(s, ask, oppositeSymbol, (ask + TARGET_DELTA).toFixed(2), execQty);
+      // executeArbitrage(s, ask, oppositeSymbol, (ask + TARGET_DELTA).toFixed(2), execQty);
+      executeArbitrage(s, ask, oppositeSymbol, oBid, execQty);
     } 
     else {
       const
@@ -75,7 +76,7 @@ client.on('message', msg => {
       prefQty = Math.floor( USD_TRADE_QTY / ask * 10000 ) / 10000;
 
       const execQty = Math.min( oAskQty, bidQty, prefQty );
-      executeArbitrage(oppositeSymbol, oAsk, s, (oAsk + TARGET_DELTA).toFixed(2), execQty);
+      executeArbitrage(oppositeSymbol, oAsk, s, bid, execQty);
     }
   }
   
