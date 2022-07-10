@@ -30,6 +30,7 @@ const latestOrder = {};
 // Lock loop execution while we're working on an order
 let LOCK_LOOP = false;
 
+console.log('RUNNING...');
 const client = new ws('wss://stream.binance.us:9443/stream?streams=btcusd@bookTicker/btcbusd@bookTicker');
 client.on('message', msg => {
   if (LOCK_LOOP === true) return;
