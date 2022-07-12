@@ -19,10 +19,13 @@ const MIN_USD_TRADE = 10;
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 75;
+const RECV_WINDOW_MS = 50;
 
-// If a sell order fails to post; try again after a short delay
-const RETRY_SELL_INTERVAL_MS = 250;
+// delay before retrying a sell attempt
+const RETRY_DELAY_MS = 100
+
+// max attempts before giving up on order
+const MAX_ATTEMPTS = 20;
 
 // Track latest price
 const latestOrder = {};
@@ -30,7 +33,6 @@ const latestOrder = {};
 // Lock loop execution while we're working on an order
 let LOCK_LOOP = false;
 
-console.log('RUNNING...');
 const client = new ws('wss://stream.binance.us:9443/stream?streams=btcusd@bookTicker/btcbusd@bookTicker');
 client.on('message', msg => {
   if (LOCK_LOOP === true) return;
@@ -50,75 +52,55 @@ client.on('message', msg => {
   if (!latestOppositeOrder) return;
 
   const
-  ask = +a,
-  bid = +b,
-  oAsk = +(latestOrder[oppositeSymbol].a),
-  oBid = +(latestOrder[oppositeSymbol].b);
-
-  const
+  askPrice = +a,
+  bidPrice = +b,
+  oAskPrice = +(latestOrder[oppositeSymbol].a),
+  oBidPrice = +(latestOrder[oppositeSymbol].b);
 
   // we're buying the ask and selling the bed if their diff is > delta
-  diffA = oBid - ask - TARGET_DELTA,
-  diffB = bid - oAsk - TARGET_DELTA;
-  // diffA = oBid + MARKET_DIFF - ask,
-  // diffB = bid + MARKET_DIFF - oAsk;
+  const
+  diffA = oBidPrice - askPrice - TARGET_DELTA,
+  diffB = bidPrice - oAskPrice - TARGET_DELTA;
 
   if (diffA <= 0 && diffB <= 0) return;
   else {
     LOCK_LOOP = true;
 
-    if (diffA > diffB) {
-      const
-      askQty = +A,
-      oBidQty = +(latestOrder[oppositeSymbol].B),
-      prefQty = Math.floor( USD_TRADE_QTY / oAsk * 10000 ) / 10000;
+    const _exec = (buySymbol, buyPrice, sellSymbol) => {
+      const buyQty = Math.floor( USD_TRADE_QTY / buyPrice * 10000 ) / 10000;
 
-      const execQty = Math.min( askQty, oBidQty, prefQty );
-      if ( execQty * oBid < MIN_USD_TRADE ) {
-        LOCK_LOOP = false;
-        return;
-      }
+      if (buyQty * buyPrice < MIN_USD_TRADE) LOCK_LOOP = false;
+      else executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol);
+    };
 
-      executeArbitrage(s, ask, oppositeSymbol, (ask + TARGET_DELTA).toFixed(2), execQty);
-    } 
-    else {
-      const
-      oAskQty = +(latestOrder[oppositeSymbol].A),
-      bidQty = +B,
-      prefQty = Math.floor( USD_TRADE_QTY / ask * 10000 ) / 10000;
-
-      const execQty = Math.min( oAskQty, bidQty, prefQty );
-      if ( execQty * bid < MIN_USD_TRADE ) {
-        LOCK_LOOP = false;
-        return;
-      }
-
-      executeArbitrage(oppositeSymbol, oAsk, s, (oAsk + TARGET_DELTA).toFixed(2), execQty);
-    }
+    if (diffA > diffB) _exec(s, askPrice, oppositeSymbol);
+    else _exec(oppositeSymbol, oAskPrice, s);
   }
   
 });
 
-function executeArbitrage(buySymbol, buyPrice, sellSymbol, sellPrice, quantity) {
+/**
+ * 
+ * @param {String} buySymbol 
+ * @param {Number | String} buyPrice 
+ * @param {String} sellSymbol 
+ */
+async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol) {
 
-  const sellCb = () => postOrder({
-    side: 'SELL',
-    price: sellPrice,
-    symbol: sellSymbol,
-    quantity,
-    callback: () => LOCK_LOOP = false,
-    errorHandler: () => setTimeout(sellCb, RETRY_SELL_INTERVAL_MS)
-  });
+  const q = {
+    side:         'BUY',
+    type:         'LIMIT',
+    price:        buyPrice,
+    symbol:       buySymbol,
+    quantity:     buyQty,
+    timestamp:    Date.now(),
+    recvWindow:   RECV_WINDOW_MS,
+    timeInForce:  'GTC',
+  };
 
-  postOrder({
-    side: 'BUY',
-    symbol: buySymbol,
-    price: buyPrice,
-    quantity,
-    callback: sellCb
-  });
-
-  if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Buy ${buySymbol} @ ${buyPrice}. Sell ${sellSymbol} @ ${sellPrice}. Q: ${quantity}`);
+  const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
+  if (e) handleError(e);
+  else sellAfterBuy(buySymbol, buyQty, sellSymbol, orderRes);
 }
 
 /**
@@ -146,60 +128,96 @@ function makeBinanceQueryString(q) {
 }
 
 /**
- * Post an order of specified side, quantity, and price.
- * Execute callback if successful.
- * 
- * @param {{
- *  side:         'BUY'|'SELL',
- * symbol:        String,
- * quantity:      Number,
- * price:         Number,
- * callback?:     Function,
- * errorHandler?: Function,
- * }} param0 
+ * Cancel a given order.
+ * @param {String} orderId the orderID to cancel
  */
-async function postOrder({
-  side,
-  symbol,
-  quantity,
-  price,
-  callback,
-  errorHandler
-}) {
+ async function cancelOrder(orderId) {
   const q = {
-    type:         'LIMIT',
-    timeInForce:  'GTC',
-    recvWindow:   RECV_WINDOW_MS,
-    timestamp:    Date.now(),
-    side,
-    symbol,
-    quantity,
-    price
+    symbol: 'BTCUSD',
+    orderId,
+    timestamp: Date.now()
   };
 
-  const query = makeBinanceQueryString(q);
+  const [e, ] = await r_request('/api/v3/order', q, 'DELETE');
+  if (e) handleError(e);
+}
 
-  request(`https://api.binance.us/api/v3/order?${query}`, {
-    method: 'POST',
-    headers: {
-      'X-MBX-APIKEY': process.env.API_KEY
+async function sellAfterBuy(buySymbol, buyQty, sellSymbol, orderRes) {
+  // check if the order was executed for up to 2s after posting.
+  // if 50% or more executed, sell
+  // otherwise, just cancel and keep going
+  // always market sell, since we're only executing if the cross market ask is more than the bid
+  // so a market sell guarantees that we make money
+  // in the case that a bid gets sniped, we should lose a lot less than if we leave the order hanging
+
+  const { orderId } = orderRes;
+  let numAttepts = MAX_ATTEMPTS;
+
+  // Use this to check an order's status & execute the next step in the logic.
+  const _checkOrderStatus = ({ status, executedQty }) => {
+    if (status === 'FILLED') _postMarketSell(buyQty);
+    else if (status === 'PARTIALLY_FILLED') {
+      if (+executedQty >= (buyQty/2)) _postMarketSell(executedQty);
+      else if (numAttepts-- > 0) setTimeout( () => _checkBuy(), RETRY_DELAY_MS );
+      else cancelOrder(orderId);
     }
-  })
-  .then(res => {
-    const { body, statusCode } = res;
-    if (statusCode === 200) callback();
-    else body.json().then(errorHandler ?? handleError);
-  });
+    else _postMarketSell(buyQty);
+  };
+
+  // Use this to just market sell.
+  const _postMarketSell = async (qty) => {
+    const q = {
+      symbol: sellSymbol,
+      type: 'MARKET',
+      side: 'SELL',
+      timestamp: Date.now(),
+      quantity: qty
+    };
+    await r_request('/api/v3/order', q, 'POST');
+    LOCK_LOOP = false;
+  };
+
+  // Use this to check the buy order's status..
+  // Logic is separated b/c we want to check the order first before calling API again
+  const _checkBuy = async () => {
+    const q = {
+      symbol: buySymbol,
+      orderId,
+      timestamp: Date.now(),
+    };
+    const [, { executedQty, status }] = await r_request('/api/v3/order', q, 'GET');
+    _checkOrderStatus({ executedQty, status });
+  };
+
+  _checkOrderStatus(orderRes);
 }
 
 /**
- * 
+ * Robust function to call the ubinci request method.
+ */
+async function r_request(endpoint, q, method) {
+  const query = makeBinanceQueryString(q);
+  
+  const res = await request(`https://api.binance.us${endpoint}?${query}`, {
+    method,
+    headers: {
+      'X-MBX-APIKEY': process.env.API_KEY
+    }
+  });
+
+  const data = await res.body.json();
+
+  if (res.statusCode != 200) return [data];
+  else return [null, data];
+}
+
+/**
+ * Generic error handler.
+ * Just print and keep going.
  * @param {*} e 
  */
 function handleError(data) {
   LOCK_LOOP = false;
-
-  if (data.code == -1013) return;
 
   if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Error! msg: ${ data.msg }`);
 }
