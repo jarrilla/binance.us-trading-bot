@@ -156,12 +156,11 @@ async function sellAfterBuy(buySymbol, buyQty, sellSymbol, orderRes) {
   // Use this to check an order's status & execute the next step in the logic.
   const _checkOrderStatus = ({ status, executedQty }) => {
     if (status === 'FILLED') _postMarketSell(buyQty);
-    else if (status === 'PARTIALLY_FILLED') {
+    else {
       if (+executedQty >= (buyQty/2)) _postMarketSell(executedQty);
       else if (numAttepts-- > 0) setTimeout( () => _checkBuy(), RETRY_DELAY_MS );
       else cancelOrder(orderId);
     }
-    else _postMarketSell(buyQty);
   };
 
   // Use this to just market sell.
