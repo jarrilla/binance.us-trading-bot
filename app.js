@@ -132,7 +132,7 @@ function makeBinanceQueryString(q) {
  * Cancel a given order.
  * @param {String} orderId the orderID to cancel
  */
- async function cancelOrder(orderId) {
+ async function cancelOrder(orderId, msCallback) {
   const q = {
     symbol: 'BTCUSD',
     orderId,
@@ -140,7 +140,8 @@ function makeBinanceQueryString(q) {
   };
 
   const [e, ] = await r_request('/api/v3/order', q, 'DELETE');
-  if (e) handleError(e);
+  if (e.code === -2011) msCallback();
+  else if (e) handleError(e);
 }
 
 async function sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes) {
@@ -161,7 +162,7 @@ async function sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes) 
       if (+executedQty >= (buyQty/2)) _postMarketSell(executedQty);
       else if (numAttepts-- > 0) setTimeout( () => _checkBuy(), RETRY_DELAY_MS );
       else {
-        cancelOrder(orderId);
+        cancelOrder(orderId, _postMarketSell);
         LOCK_LOOP = false;
       }
     }
@@ -240,5 +241,5 @@ async function r_request(endpoint, q, method) {
 function handleError(data) {
   LOCK_LOOP = false;
 
-  if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Error! msg: ${ data.msg }`);
+  if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Error! ${ JSON.stringify(data) }`);
 }
