@@ -96,6 +96,7 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol) {
     timestamp:    Date.now(),
     recvWindow:   RECV_WINDOW_MS,
     timeInForce:  'GTC',
+    newOrderRespType: 'RESULT'
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
@@ -142,7 +143,7 @@ function makeBinanceQueryString(q) {
   if (e) handleError(e);
 }
 
-async function sellAfterBuy(buySymbol, buyQty, sellSymbol, orderRes) {
+async function sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes) {
   // check if the order was executed for up to 2s after posting.
   // if 50% or more executed, sell
   // otherwise, just cancel and keep going
@@ -155,7 +156,7 @@ async function sellAfterBuy(buySymbol, buyQty, sellSymbol, orderRes) {
 
   // Use this to check an order's status & execute the next step in the logic.
   const _checkOrderStatus = ({ status, executedQty }) => {
-    if (status === 'FILLED') _postMarketSell(buyQty);
+    if (status === 'FILLED') _postSellOrder(executedQty);
     else {
       if (+executedQty >= (buyQty/2)) _postMarketSell(executedQty);
       else if (numAttepts-- > 0) setTimeout( () => _checkBuy(), RETRY_DELAY_MS );
@@ -166,14 +167,32 @@ async function sellAfterBuy(buySymbol, buyQty, sellSymbol, orderRes) {
     }
   };
 
+  // Use this to sell at specific price
+  const _postSellOrder = async (quantity) => {
+    const q = {
+      side:         'SELL',
+      type:         'LIMIT',
+      price:        sellPrice,
+      symbol:       sellSymbol,
+      quantity:     quantity,
+      timestamp:    Date.now(),
+      recvWindow:   RECV_WINDOW_MS,
+      timeInForce:  'GTC',
+      newOrderRespType: 'RESULT'
+    };
+    const [e, ] = await r_request('/api/v3/order', q, 'POST');
+    if (e) _postMarketSell();
+    else LOCK_LOOP = false;
+  };
+
   // Use this to just market sell.
-  const _postMarketSell = async (qty) => {
+  const _postMarketSell = async (quantity) => {
     const q = {
       symbol: sellSymbol,
       type: 'MARKET',
       side: 'SELL',
       timestamp: Date.now(),
-      quantity: qty
+      quantity
     };
     await r_request('/api/v3/order', q, 'POST');
     LOCK_LOOP = false;
