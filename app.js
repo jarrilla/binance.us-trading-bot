@@ -101,7 +101,7 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol) {
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
   if (e) handleError(e);
-  else sellAfterBuy(buySymbol, buyQty, sellSymbol, orderRes);
+  else sellAfterBuy(buySymbol, buyQty, sellSymbol, (buyPrice+TARGET_DELTA).toFixed(2), orderRes);
 }
 
 /**
