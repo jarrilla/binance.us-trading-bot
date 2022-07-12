@@ -159,7 +159,10 @@ async function sellAfterBuy(buySymbol, buyQty, sellSymbol, orderRes) {
     else {
       if (+executedQty >= (buyQty/2)) _postMarketSell(executedQty);
       else if (numAttepts-- > 0) setTimeout( () => _checkBuy(), RETRY_DELAY_MS );
-      else cancelOrder(orderId);
+      else {
+        cancelOrder(orderId);
+        LOCK_LOOP = false;
+      }
     }
   };
 
