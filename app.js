@@ -33,7 +33,7 @@ const latestOrder = {};
 // Lock loop execution while we're working on an order
 let LOCK_LOOP = false;
 
-const client = new ws('wss://stream.binance.us:9443/stream?streams=btcusd@bookTicker/btcbusd@bookTicker');
+const client = new ws('wss://stream.binance.us:9443/stream?streams=btcusd@bookTicker/btcusdt@bookTicker');
 client.on('message', msg => {
   if (LOCK_LOOP === true) return;
 
@@ -66,15 +66,15 @@ client.on('message', msg => {
   else {
     LOCK_LOOP = true;
 
-    const _exec = (buySymbol, buyPrice, sellSymbol) => {
+    const _exec = (buySymbol, buyPrice, sellSymbol, sellPrice) => {
       const buyQty = Math.floor( USD_TRADE_QTY / buyPrice * 10000 ) / 10000;
 
       if (buyQty * buyPrice < MIN_USD_TRADE) LOCK_LOOP = false;
-      else executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol);
+      else executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPrice);
     };
 
-    if (diffA > diffB) _exec(s, askPrice, oppositeSymbol);
-    else _exec(oppositeSymbol, oAskPrice, s);
+    if (diffA > diffB) _exec(s, askPrice, oppositeSymbol, oBidPrice);
+    else _exec(oppositeSymbol, oAskPrice, s, bidPrice);
   }
   
 });
@@ -85,7 +85,7 @@ client.on('message', msg => {
  * @param {Number | String} buyPrice 
  * @param {String} sellSymbol 
  */
-async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol) {
+async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPrice) {
 
   const q = {
     side:         'BUY',
@@ -109,7 +109,8 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol) {
       console.log('BUY >');
       console.log(orderRes);
     }
-    sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
+    // sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
+    sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
   }
 }
 
@@ -145,7 +146,8 @@ function makeBinanceQueryString(q) {
   orderId,
   buySymbol,
   sellSymbol,
-  originalBuyQty=undefined
+  side,
+  originalQty=undefined,
 ) {
   const q = {
     symbol: buySymbol,
@@ -155,21 +157,24 @@ function makeBinanceQueryString(q) {
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
   if (e?.code === -2011) {
-    marketSell(sellSymbol, originalBuyQty);
+    
+    // if BUY got filled, just market sell
+    // TODO: we could actually still recover and potentially arbitrage here
+    if (side === 'BUY') {
+      marketSell(sellSymbol, executedQty);
+    }
+
     return [null, ];
   }
   else if (!e) {
-    const { status, executedQty } = orderRes;
-    if (status === 'FILLED') {
-      LOCK_LOOP = false;
-      return [null, ];
-    }
-    else {
-      const sellQty = originalBuyQty ? (+originalBuyQty - +executedQty) : executedQty;
-      marketSell(sellSymbol, Number(sellQty).toFixed(2));
-  
-      return [null, ];
-    }
+    const { executedQty } = orderRes;
+
+    let sellQty;
+    if (side === 'BUY') sellQty = executedQty;
+    else sellQty = originalQty ? (+originalQty - +executedQty) : executedQty;
+
+    marketSell(sellSymbol, Number(sellQty).toFixed(2));
+    return [null, ];
   }
   else {
     handleError(e);
@@ -177,7 +182,7 @@ function makeBinanceQueryString(q) {
   }
 }
 
-async function sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes, numAttepts=MAX_ATTEMPTS) {
+async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orderRes, numAttepts=MAX_ATTEMPTS) {
   // check if the order was executed for up to 2s after posting.
   // if 50% or more executed, sell
   // otherwise, just cancel and keep going
@@ -193,17 +198,17 @@ async function sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes, 
   }
 
   const { status, executedQty } = statusRes;
-  if (status === 'FILLED') limitSell(sellSymbol, executedQty, sellPrice);
+  if (status === 'FILLED') limitSell(sellSymbol, buyQtyPosted, sellPrice);
   else {
-    if (
-      (+executedQty >= (buyQty/2)) ||
-      numAttepts <= 0
-    ) {
-      cancelAndMarketSell(orderId, buySymbol, sellSymbol);
+    if ( +executedQty >= (buyQtyPosted/2) ) {
+      cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY');
+    }
+    else if ( numAttepts === 0 ) {
+      cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY');
     }
     else {
       setTimeout(() => {
-        sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes, numAttepts-1);
+        sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orderRes, numAttepts-1);
       }, RETRY_DELAY_MS); 
     }
   }
@@ -289,7 +294,7 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
   else {
 
     // if this is last attempt, just market sell
-    if (numAttepts === 0) return cancelAndMarketSell(orderId, symbol, symbol, quantity);
+    if (numAttepts === 0) cancelAndMarketSell(orderId, symbol, symbol, 'SELL', quantity);
     else setTimeout(() => {
       trackSellOrder(quantity, symbol, orderId, numAttepts-1);
     }, RETRY_DELAY_MS);
@@ -302,7 +307,6 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
  * @param {Number | String} quantity 
  */
 async function marketSell(symbol, quantity) {
-  console.debug({ symbol, quantity });
 
   const q = {
     type: 'MARKET',
