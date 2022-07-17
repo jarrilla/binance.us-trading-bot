@@ -4,7 +4,7 @@ const ws = require('ws');
 const { request } = require('undici');
 
 // show logs if debugging
-const SHOW_LOGS = false;
+const SHOW_LOGS = true;
 
 // The minimum delta to look for between market 1's lowest ask and market 2's highest bid.
 // If we spot a window with this delta, execute an arbitrage.
@@ -19,7 +19,7 @@ const MIN_USD_TRADE = 10;
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 50;
+const RECV_WINDOW_MS = 150;
 
 // delay before retrying a sell attempt
 const RETRY_DELAY_MS = 100
@@ -47,7 +47,7 @@ client.on('message', msg => {
   const { s, a, A, b, B } = data.data;
   latestOrder[s] = { a, A, b, B };
 
-  const oppositeSymbol = s === 'BTCUSD' ? 'BTCBUSD' : 'BTCUSD';
+  const oppositeSymbol = s === 'BTCUSD' ? 'BTCUSDT' : 'BTCUSD';
   const latestOppositeOrder = latestOrder[oppositeSymbol];
   if (!latestOppositeOrder) return;
 
@@ -80,7 +80,7 @@ client.on('message', msg => {
 });
 
 /**
- * 
+ * BUY low SELL high
  * @param {String} buySymbol 
  * @param {Number | String} buyPrice 
  * @param {String} sellSymbol 
@@ -100,8 +100,17 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol) {
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
-  if (e) handleError(e);
-  else sellAfterBuy(buySymbol, buyQty, sellSymbol, (buyPrice+TARGET_DELTA).toFixed(2), orderRes);
+  if (e) {
+    handleError(e);
+    return [e];
+  }
+  else {
+    if (SHOW_LOGS) {
+      console.log('BUY >');
+      console.log(orderRes);
+    }
+    sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
+  }
 }
 
 /**
@@ -132,19 +141,43 @@ function makeBinanceQueryString(q) {
  * Cancel a given order.
  * @param {String} orderId the orderID to cancel
  */
- async function cancelOrder(orderId, msCallback) {
+ async function cancelAndMarketSell(
+  orderId,
+  buySymbol,
+  sellSymbol,
+  originalBuyQty=undefined
+) {
   const q = {
-    symbol: 'BTCUSD',
+    symbol: buySymbol,
     orderId,
     timestamp: Date.now()
   };
 
-  const [e, ] = await r_request('/api/v3/order', q, 'DELETE');
-  if (e.code === -2011) msCallback();
-  else if (e) handleError(e);
+  const [e, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
+  if (e?.code === -2011) {
+    marketSell(sellSymbol, originalBuyQty);
+    return [null, ];
+  }
+  else if (!e) {
+    const { status, executedQty } = orderRes;
+    if (status === 'FILLED') {
+      LOCK_LOOP = false;
+      return [null, ];
+    }
+    else {
+      const sellQty = originalBuyQty ? (+originalBuyQty - +executedQty) : executedQty;
+      marketSell(sellSymbol, Number(sellQty).toFixed(2));
+  
+      return [null, ];
+    }
+  }
+  else {
+    handleError(e);
+    return [e];
+  }
 }
 
-async function sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes) {
+async function sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes, numAttepts=MAX_ATTEMPTS) {
   // check if the order was executed for up to 2s after posting.
   // if 50% or more executed, sell
   // otherwise, just cancel and keep going
@@ -153,65 +186,168 @@ async function sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes) 
   // in the case that a bid gets sniped, we should lose a lot less than if we leave the order hanging
 
   const { orderId } = orderRes;
-  let numAttepts = MAX_ATTEMPTS;
+  const [statusErr, statusRes] = await getOrderStatus(buySymbol, orderId);
+  if (statusErr) {
+    handleError(statusErr);
+    return [statusErr];
+  }
 
-  // Use this to check an order's status & execute the next step in the logic.
-  const _checkOrderStatus = ({ status, executedQty }) => {
-    if (status === 'FILLED') _postSellOrder(executedQty);
-    else {
-      if (+executedQty >= (buyQty/2)) _postMarketSell(executedQty);
-      else if (numAttepts-- > 0) setTimeout( () => _checkBuy(), RETRY_DELAY_MS );
-      else {
-        cancelOrder(orderId, _postMarketSell);
-        LOCK_LOOP = false;
-      }
+  const { status, executedQty } = statusRes;
+  if (status === 'FILLED') limitSell(sellSymbol, executedQty, sellPrice);
+  else {
+    if (
+      (+executedQty >= (buyQty/2)) ||
+      numAttepts <= 0
+    ) {
+      cancelAndMarketSell(orderId, buySymbol, sellSymbol);
     }
-  };
+    else {
+      setTimeout(() => {
+        sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes, numAttepts-1);
+      }, RETRY_DELAY_MS); 
+    }
+  }
+}
 
-  // Use this to sell at specific price
-  const _postSellOrder = async (quantity) => {
-    const q = {
-      side:         'SELL',
-      type:         'LIMIT',
-      price:        sellPrice,
-      symbol:       sellSymbol,
-      quantity:     quantity,
-      timestamp:    Date.now(),
-      recvWindow:   RECV_WINDOW_MS,
-      timeInForce:  'GTC',
-      newOrderRespType: 'RESULT'
-    };
-    const [e, ] = await r_request('/api/v3/order', q, 'POST');
-    if (e) _postMarketSell();
-    else LOCK_LOOP = false;
-  };
+/**
+ * Attempt to post a LIMIT sell order.
+ * If it fails to post, retry a few times.
+ * After order is posted, check on it for a few seconds
+ * If it never filled, cancel and market sell.
+ * @param {String} symbol
+ * @param {String | NUmber} quantity 
+ * @param {String | Number} price 
+ * @returns 
+ */
+async function limitSell(symbol, quantity, price, numAttepts=MAX_ATTEMPTS) {
+  console.debug({ symbol, quantity, price });
 
-  // Use this to just market sell.
-  const _postMarketSell = async (quantity) => {
-    const q = {
-      symbol: sellSymbol,
-      type: 'MARKET',
-      side: 'SELL',
-      timestamp: Date.now(),
-      quantity
-    };
-    await r_request('/api/v3/order', q, 'POST');
+
+  const [sellErr, sellRes] = await postSellOrder(symbol, quantity, price);
+  if (sellErr) {
+    if (numAttepts > 0) setTimeout(() => {
+      limitSell(symbol, quantity, price, numAttepts-1);
+    }, RETRY_DELAY_MS)
+    else {
+      handleError(sellErr);
+      return [sellErr];
+    }
+  }
+  else {
+    if (SHOW_LOGS) {
+      console.log('SELL >');
+      console.log(sellRes);
+    }
+
+    const { orderId } = sellRes;
+    trackSellOrder(quantity, symbol, orderId);
+
     LOCK_LOOP = false;
+  }
+}
+
+async function postSellOrder(symbol, quantity, price) {
+  const q = {
+    side:         'SELL',
+    type:         'LIMIT',
+    price,
+    symbol,
+    quantity,
+    timestamp:    Date.now(),
+    recvWindow:   RECV_WINDOW_MS,
+    timeInForce:  'GTC',
+    newOrderRespType: 'RESULT'
   };
 
-  // Use this to check the buy order's status..
-  // Logic is separated b/c we want to check the order first before calling API again
-  const _checkBuy = async () => {
-    const q = {
-      symbol: buySymbol,
-      orderId,
-      timestamp: Date.now(),
-    };
-    const [, { executedQty, status }] = await r_request('/api/v3/order', q, 'GET');
-    _checkOrderStatus({ executedQty, status });
+  const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
+  if (e) {
+    if (SHOW_LOGS) console.log(e);
+    return [e];
+  }
+  else return [null, orderRes];
+}
+
+/**
+ * Track a sell order for up to a few seconds.
+ * If it's filled before, un-track.
+ * Otherwise, cancel and market sell.
+ * 
+ * The delay should be short so we don't lose too much by market selling.
+ * @param {String | Number} quantity 
+ * @param {String} symbol 
+ * @param {String} orderId 
+ * @param {Number?} numAttepts 
+ * @returns 
+ */
+async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS) {
+  const [statusErr, statusRes] = await getOrderStatus(symbol, orderId);
+
+  if (statusErr) return marketSell(symbol, quantity);
+  const { status } = statusRes;
+
+  if (status === 'FILLED') return;
+  else {
+
+    // if this is last attempt, just market sell
+    if (numAttepts === 0) return cancelAndMarketSell(orderId, symbol, symbol, quantity);
+    else setTimeout(() => {
+      trackSellOrder(quantity, symbol, orderId, numAttepts-1);
+    }, RETRY_DELAY_MS);
+  }
+}
+
+/**
+ * Post a market sell for the specified (symbol, quantity)
+ * @param {String} symbol 
+ * @param {Number | String} quantity 
+ */
+async function marketSell(symbol, quantity) {
+  console.debug({ symbol, quantity });
+
+  const q = {
+    type: 'MARKET',
+    side: 'SELL',
+    symbol,
+    quantity,
+    timestamp: Date.now(),
   };
 
-  _checkOrderStatus(orderRes);
+  const [e, r] = await r_request('/api/v3/order', q, 'POST');
+  if (e) {
+    handleError(e);
+    return [e];
+  }
+  else {
+    if (SHOW_LOGS) {
+      console.log('MARKET SELL >');
+      console.log(r);
+    }
+
+    LOCK_LOOP = false;
+    return [null, ];
+  }
+}
+
+/**
+ * Check order status for given (symbol, order)
+ * @param {String} symbol 
+ * @param {String} orderId 
+ * @returns 
+ */
+async function getOrderStatus(symbol, orderId) {
+  const q = {
+    symbol,
+    orderId,
+    timestamp: Date.now()
+  };
+
+  const [e, res] = await r_request('/api/v3/order', q, 'GET');
+  if (e) {
+    if (SHOW_LOGS) console.log(e);
+    return [e];
+  }
+
+  return [null, res];
 }
 
 /**
