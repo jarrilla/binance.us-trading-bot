@@ -19,10 +19,10 @@ const MIN_USD_TRADE = 10;
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 150;
+const RECV_WINDOW_MS = 50;
 
 // delay before retrying a sell attempt
-const RETRY_DELAY_MS = 100
+const RETRY_DELAY_MS = 150
 
 // max attempts before giving up on order
 const MAX_ATTEMPTS = 20;
@@ -146,7 +146,8 @@ function makeBinanceQueryString(q) {
   orderId,
   buySymbol,
   sellSymbol,
-  side
+  side,
+  buyQty
 ) {
   const q = {
     symbol: buySymbol,
@@ -155,14 +156,12 @@ function makeBinanceQueryString(q) {
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
-  console.log({ e, orderRes });
-
   if (e?.code === -2011) {
     
     // if BUY got filled, just market sell
     // TODO: we could actually still recover and potentially arbitrage here
     if (side === 'BUY') {
-      marketSell(sellSymbol, originalQty);
+      marketSell(sellSymbol, buyQty);
     }
 
     return [null, ];
@@ -191,6 +190,10 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
   // so a market sell guarantees that we make money
   // in the case that a bid gets sniped, we should lose a lot less than if we leave the order hanging
 
+  if (orderRes.status === 'FILLED') {
+    return setTimeout(() => limitSell(sellSymbol, buyQtyPosted, sellPrice), RETRY_DELAY_MS);
+  }
+
   const { orderId } = orderRes;
   const [statusErr, statusRes] = await getOrderStatus(buySymbol, orderId);
   if (statusErr) {
@@ -199,20 +202,16 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
   }
 
   const { status, executedQty } = statusRes;
-  if (status === 'FILLED') limitSell(sellSymbol, buyQtyPosted, sellPrice);
+  if (status === 'FILLED') return setTimeout(() => limitSell(sellSymbol, buyQtyPosted, sellPrice), RETRY_DELAY_MS);
   else {
     if (
       (+executedQty >= (buyQtyPosted/2)) ||
       (numAttepts === 0)
     ) {
-      setTimeout(() => {
-        cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', executedQty)
-      }, RETRY_DELAY_MS);
+      setTimeout(() => cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', executedQty), RETRY_DELAY_MS);
     }
     else {
-      setTimeout(() => {
-        sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orderRes, numAttepts-1);
-      }, RETRY_DELAY_MS); 
+      setTimeout(() => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orderRes, numAttepts-1), RETRY_DELAY_MS);
     }
   }
 }
@@ -228,18 +227,10 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
  * @returns 
  */
 async function limitSell(symbol, quantity, price, numAttepts=MAX_ATTEMPTS) {
-  console.debug({ symbol, quantity, price });
-
-
   const [sellErr, sellRes] = await postSellOrder(symbol, quantity, price);
   if (sellErr) {
-    if (numAttepts > 0) setTimeout(() => {
-      limitSell(symbol, quantity, price, numAttepts-1);
-    }, RETRY_DELAY_MS)
-    else {
-      handleError(sellErr);
-      return [sellErr];
-    }
+    if (numAttepts > 0) setTimeout(() => limitSell(symbol, quantity, price, numAttepts-1), RETRY_DELAY_MS);
+    else handleError(sellErr);
   }
   else {
     if (SHOW_LOGS) {
@@ -298,9 +289,7 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
 
     // if this is last attempt, just market sell
     if (numAttepts === 0) cancelAndMarketSell(orderId, symbol, symbol, 'SELL');
-    else setTimeout(() => {
-      trackSellOrder(quantity, symbol, orderId, numAttepts-1);
-    }, RETRY_DELAY_MS);
+    else setTimeout(() => trackSellOrder(quantity, symbol, orderId, numAttepts-1), RETRY_DELAY_MS);
   }
 }
 
