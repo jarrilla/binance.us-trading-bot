@@ -109,8 +109,8 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
       console.log('BUY >');
       console.log(orderRes);
     }
-    // sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
-    sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
+    sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
+    // sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
   }
 }
 
