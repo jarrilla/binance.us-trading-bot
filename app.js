@@ -203,7 +203,7 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
   if (status === 'FILLED') limitSell(sellSymbol, buyQtyPosted, sellPrice);
   else {
     if ( +executedQty >= (buyQtyPosted/2) ) {
-      cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', buyQtyPosted);
+      cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY');
     }
     else if ( numAttepts === 0 ) {
       cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY');
