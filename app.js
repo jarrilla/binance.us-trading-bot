@@ -33,7 +33,7 @@ const latestOrder = {};
 // Lock loop execution while we're working on an order
 let LOCK_LOOP = false;
 
-const client = new ws('wss://stream.binance.us:9443/stream?streams=btcusd@bookTicker/btcusdt@bookTicker');
+const client = new ws('wss://stream.binance.us:9443/stream?streams=btcusd@bookTicker/btcbusd@bookTicker');
 client.on('message', msg => {
   if (LOCK_LOOP === true) return;
 
@@ -47,7 +47,7 @@ client.on('message', msg => {
   const { s, a, A, b, B } = data.data;
   latestOrder[s] = { a, A, b, B };
 
-  const oppositeSymbol = s === 'BTCUSD' ? 'BTCUSDT' : 'BTCUSD';
+  const oppositeSymbol = s === 'BTCUSD' ? 'BTCBUSD' : 'BTCUSD';
   const latestOppositeOrder = latestOrder[oppositeSymbol];
   if (!latestOppositeOrder) return;
 
