@@ -8,9 +8,9 @@ const i_axios = axios.create({
   headers: { 'X-MBX-APIKEY': process.env.API_KEY }
 });
 
-const SELL_DIFF = +1.5;
+const SELL_DIFF = +0.25;
 const MAX_BUY_DELAY_S = 5;
-const MAX_SELL_DELAY_S = 25;
+const MAX_SELL_DELAY_S = 5;
 
 // Small delay after successful sell or buy so funds are available
 const TXN_SUCCESS_DELAY = 250;
