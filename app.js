@@ -146,8 +146,7 @@ function makeBinanceQueryString(q) {
   orderId,
   buySymbol,
   sellSymbol,
-  side,
-  originalQty=undefined,
+  side
 ) {
   const q = {
     symbol: buySymbol,
@@ -169,13 +168,13 @@ function makeBinanceQueryString(q) {
     return [null, ];
   }
   else if (!e) {
-    const { executedQty } = orderRes;
+    const { executedQty, origQty } = orderRes;
 
     let sellQty;
     if (side === 'BUY') sellQty = executedQty;
-    else sellQty = originalQty ? (+originalQty) - (+executedQty) : executedQty;
+    else sellQty = Math.floor( (Number(origQty) - Number(executedQty)) * 10000 ) / 10000;
 
-    marketSell(sellSymbol, Number(sellQty).toFixed(2));
+    marketSell(sellSymbol, sellQty);
     return [null, ];
   }
   else {
@@ -202,11 +201,13 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
   const { status, executedQty } = statusRes;
   if (status === 'FILLED') limitSell(sellSymbol, buyQtyPosted, sellPrice);
   else {
-    if ( +executedQty >= (buyQtyPosted/2) ) {
-      cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY');
-    }
-    else if ( numAttepts === 0 ) {
-      cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY');
+    if (
+      (+executedQty >= (buyQtyPosted/2)) ||
+      (numAttepts === 0)
+    ) {
+      setTimeout(() => {
+        cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', executedQty)
+      }, RETRY_DELAY_MS);
     }
     else {
       setTimeout(() => {
@@ -296,7 +297,7 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
   else {
 
     // if this is last attempt, just market sell
-    if (numAttepts === 0) cancelAndMarketSell(orderId, symbol, symbol, 'SELL', quantity);
+    if (numAttepts === 0) cancelAndMarketSell(orderId, symbol, symbol, 'SELL');
     else setTimeout(() => {
       trackSellOrder(quantity, symbol, orderId, numAttepts-1);
     }, RETRY_DELAY_MS);
