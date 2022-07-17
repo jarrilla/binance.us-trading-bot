@@ -156,12 +156,14 @@ function makeBinanceQueryString(q) {
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
+  console.log({ e, orderRes });
+
   if (e?.code === -2011) {
     
     // if BUY got filled, just market sell
     // TODO: we could actually still recover and potentially arbitrage here
     if (side === 'BUY') {
-      marketSell(sellSymbol, executedQty);
+      marketSell(sellSymbol, originalQty);
     }
 
     return [null, ];
@@ -171,7 +173,7 @@ function makeBinanceQueryString(q) {
 
     let sellQty;
     if (side === 'BUY') sellQty = executedQty;
-    else sellQty = originalQty ? (+originalQty - +executedQty) : executedQty;
+    else sellQty = originalQty ? (+originalQty) - (+executedQty) : executedQty;
 
     marketSell(sellSymbol, Number(sellQty).toFixed(2));
     return [null, ];
@@ -201,7 +203,7 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
   if (status === 'FILLED') limitSell(sellSymbol, buyQtyPosted, sellPrice);
   else {
     if ( +executedQty >= (buyQtyPosted/2) ) {
-      cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY');
+      cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', buyQtyPosted);
     }
     else if ( numAttepts === 0 ) {
       cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY');
@@ -315,6 +317,9 @@ async function marketSell(symbol, quantity) {
     quantity,
     timestamp: Date.now(),
   };
+
+  console.log('MARKET SELLING ::');
+  console.log(q);
 
   const [e, r] = await r_request('/api/v3/order', q, 'POST');
   if (e) {
