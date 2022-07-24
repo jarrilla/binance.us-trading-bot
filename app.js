@@ -19,7 +19,7 @@ const MIN_USD_TRADE = 10;
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 50;
+const RECV_WINDOW_MS = 150;
 
 // delay before retrying a sell attempt
 const RETRY_DELAY_MS = 150
@@ -37,6 +37,8 @@ const client = new ws('wss://stream.binance.us:9443/stream?streams=btcusd@bookTi
 client.on('message', msg => {
   if (LOCK_LOOP === true) return;
 
+  LOCK_LOOP = true;
+
   const data = JSON.parse(msg);
 
   // s = symbol
@@ -49,7 +51,10 @@ client.on('message', msg => {
 
   const oppositeSymbol = s === 'BTCUSD' ? 'BTCBUSD' : 'BTCUSD';
   const latestOppositeOrder = latestOrder[oppositeSymbol];
-  if (!latestOppositeOrder) return;
+  if (!latestOppositeOrder) {
+    LOCK_LOOP = false;
+    return;
+  }
 
   const
   askPrice = +a,
@@ -62,19 +67,23 @@ client.on('message', msg => {
   diffA = oBidPrice - askPrice - TARGET_DELTA,
   diffB = bidPrice - oAskPrice - TARGET_DELTA;
 
-  if (diffA <= 0 && diffB <= 0) return;
+  if (diffA <= 0 && diffB <= 0) {
+    LOCK_LOOP = false;
+    return;
+  }
   else {
-    LOCK_LOOP = true;
+    if (diffA > diffB) {
+      const buyQty = Math.floor( USD_TRADE_QTY / askPrice * 10000 ) / 10000;
 
-    const _exec = (buySymbol, buyPrice, sellSymbol, sellPrice) => {
-      const buyQty = Math.floor( USD_TRADE_QTY / buyPrice * 10000 ) / 10000;
+      if ( buyQty * askPrice < MIN_USD_TRADE ) LOCK_LOOP = false;
+      else executeArbitrage(s, askPrice, buyQty, oppositeSymbol, oBidPrice);
+    }
+    else {
+      const buyQty = Math.floor( USD_TRADE_QTY / oAskPrice * 10000 ) / 10000;
 
-      if (buyQty * buyPrice < MIN_USD_TRADE) LOCK_LOOP = false;
-      else executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPrice);
-    };
-
-    if (diffA > diffB) _exec(s, askPrice, oppositeSymbol, oBidPrice);
-    else _exec(oppositeSymbol, oAskPrice, s, bidPrice);
+      if ( buyQty * oAskPrice < MIN_USD_TRADE ) LOCK_LOOP = false;
+      else executeArbitrage(oppositeSymbol, oAskPrice, buyQty, s, bidPrice);
+    }
   }
   
 });
@@ -160,7 +169,7 @@ function makeBinanceQueryString(q) {
     
     // if BUY got filled, just market sell
     // TODO: we could actually still recover and potentially arbitrage here
-    if (side === 'BUY') {
+    if (side === 'BUY' && +buyQty != 0) {
       marketSell(sellSymbol, buyQty);
     }
 
@@ -190,30 +199,31 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
   // so a market sell guarantees that we make money
   // in the case that a bid gets sniped, we should lose a lot less than if we leave the order hanging
 
-  if (orderRes.status === 'FILLED') {
-    return setTimeout(() => limitSell(sellSymbol, buyQtyPosted, sellPrice), RETRY_DELAY_MS);
+  const { orderId, executedQty, status } = orderRes;
+
+  if (status === 'FILLED') {
+    return limitSell(sellSymbol, buyQtyPosted, sellPrice);
+  }
+  else if (status === 'PARTIALLY_FILLED' && (+(executedQty) >= (buyQtyPosted/2))) {
+    await limitSell(sellSymbol, executedQty, sellPrice);
+
+    const mSellQty = (+buyQtyPosted - (+executedQty)).toFixed(2);
+    return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', mSellQty);
+  }
+  else if (numAttepts === 0) {
+    return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', executedQty);
   }
 
-  const { orderId } = orderRes;
   const [statusErr, statusRes] = await getOrderStatus(buySymbol, orderId);
   if (statusErr) {
     handleError(statusErr);
     return [statusErr];
   }
 
-  const { status, executedQty } = statusRes;
-  if (status === 'FILLED') return setTimeout(() => limitSell(sellSymbol, buyQtyPosted, sellPrice), RETRY_DELAY_MS);
-  else {
-    if (
-      (+executedQty >= (buyQtyPosted/2)) ||
-      (numAttepts === 0)
-    ) {
-      setTimeout(() => cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', executedQty), RETRY_DELAY_MS);
-    }
-    else {
-      setTimeout(() => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orderRes, numAttepts-1), RETRY_DELAY_MS);
-    }
-  }
+  setTimeout(
+    () => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, statusRes, numAttepts-1),
+    RETRY_DELAY_MS
+  );
 }
 
 /**
