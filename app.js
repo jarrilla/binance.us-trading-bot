@@ -22,10 +22,10 @@ const USD_TRADE_QTY = 25;
 const RECV_WINDOW_MS = 150;
 
 // delay before retrying a sell attempt
-const RETRY_DELAY_MS = 150
+const RETRY_DELAY_MS = 200
 
 // max attempts before giving up on order
-const MAX_ATTEMPTS = 20;
+const MAX_ATTEMPTS = 25;
 
 // Track latest price
 const latestOrder = {};
@@ -119,7 +119,6 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
       console.log(orderRes);
     }
     sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
-    // sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
   }
 }
 
@@ -317,9 +316,6 @@ async function marketSell(symbol, quantity) {
     quantity,
     timestamp: Date.now(),
   };
-
-  console.log('MARKET SELLING ::');
-  console.log(q);
 
   const [e, r] = await r_request('/api/v3/order', q, 'POST');
   if (e) {
