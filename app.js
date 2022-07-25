@@ -28,7 +28,7 @@ const RETRY_DELAY_MS = 200
 const MAX_ATTEMPTS = 35;
 
 // Track latest price
-const LATEST_ORDER = {};
+let LATEST_ORDER = {};
 
 // Lock loop execution while we're working on an order
 let LOCK_LOOP = false;
