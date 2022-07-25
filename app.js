@@ -76,13 +76,19 @@ client.on('message', msg => {
       const buyQty = Math.floor( USD_TRADE_QTY / askPrice * 10000 ) / 10000;
 
       if ( buyQty * askPrice < MIN_USD_TRADE ) LOCK_LOOP = false;
-      else executeArbitrage(s, askPrice, buyQty, oppositeSymbol, oBidPrice);
+      else {
+        if (SHOW_LOGS) console.log(`Found abritrage: B=${askPrice}; S=${oBidPrice}`);
+        executeArbitrage(s, askPrice, buyQty, oppositeSymbol, oBidPrice);
+      }
     }
     else {
       const buyQty = Math.floor( USD_TRADE_QTY / oAskPrice * 10000 ) / 10000;
 
       if ( buyQty * oAskPrice < MIN_USD_TRADE ) LOCK_LOOP = false;
-      else executeArbitrage(oppositeSymbol, oAskPrice, buyQty, s, bidPrice);
+      else {
+        if (SHOW_LOGS) console.log(`Found abritrage: B=${oAskPrice}; S=${bidPrice}`);
+        executeArbitrage(oppositeSymbol, oAskPrice, buyQty, s, bidPrice);
+      }
     }
   }
   
@@ -168,7 +174,7 @@ function makeBinanceQueryString(q) {
     
     // if BUY got filled, just market sell
     // TODO: we could actually still recover and potentially arbitrage here
-    if (side === 'BUY' && +buyQty != 0) {
+    if (side === 'BUY') {
       marketSell(sellSymbol, buyQty);
     }
 
@@ -181,7 +187,12 @@ function makeBinanceQueryString(q) {
     if (side === 'BUY') sellQty = executedQty;
     else sellQty = Math.floor( (Number(origQty) - Number(executedQty)) * 10000 ) / 10000;
 
-    marketSell(sellSymbol, sellQty);
+    if (sellQty != 0) {
+      marketSell(sellSymbol, sellQty);
+    }
+    else {
+      LOCK_LOOP = false;
+    }
     return [null, ];
   }
   else {
