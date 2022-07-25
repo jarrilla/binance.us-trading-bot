@@ -297,10 +297,7 @@ async function postSellOrder(symbol, quantity, price) {
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
-  if (e) {
-    if (SHOW_LOGS) console.log(e);
-    return [e];
-  }
+  if (e) return [e];
   else return [null, orderRes];
 }
 
