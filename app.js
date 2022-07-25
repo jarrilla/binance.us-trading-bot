@@ -121,8 +121,7 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
   }
   else {
     if (SHOW_LOGS) {
-      console.log('BUY >');
-      console.log(orderRes);
+      console.log(`> BOUGHT ${buyQty} @ ${buyPrice}`);
     }
     sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
   }
@@ -169,9 +168,12 @@ function makeBinanceQueryString(q) {
     timestamp: Date.now()
   };
 
+  if (SHOW_LOGS) console.log('> CANCELING');
   const [e, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
   if (e?.code === -2011) {
     
+    if (SHOW_LOGS) console.log('> CANCEL FAILED; ORDER FILLED');
+
     // if BUY got filled, just market sell
     // TODO: we could actually still recover and potentially arbitrage here
     if (side === 'BUY') {
@@ -181,6 +183,8 @@ function makeBinanceQueryString(q) {
     return [null, ];
   }
   else if (!e) {
+    if (SHOW_LOGS) console.log('> CANCELED');
+
     const { executedQty, origQty } = orderRes;
 
     let sellQty;
@@ -196,6 +200,8 @@ function makeBinanceQueryString(q) {
     return [null, ];
   }
   else {
+    if (SHOW_LOGS) console.log('> CANCEL FAILED; UNEXPECTED');
+
     handleError(e);
     return [e];
   }
@@ -254,8 +260,7 @@ async function limitSell(symbol, quantity, price, numAttepts=MAX_ATTEMPTS) {
   }
   else {
     if (SHOW_LOGS) {
-      console.log('SELL >');
-      console.log(sellRes);
+      console.log(`> SELLING ${quantity} @ ${price}`);
     }
 
     const { orderId } = sellRes;
