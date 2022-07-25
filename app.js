@@ -19,7 +19,7 @@ const MIN_USD_TRADE = 10;
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 150;
+const RECV_WINDOW_MS = 35;
 
 // delay before retrying a sell attempt
 const RETRY_DELAY_MS = 200
