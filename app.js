@@ -28,10 +28,23 @@ const RETRY_DELAY_MS = 200
 const MAX_ATTEMPTS = 35;
 
 // Track latest price
-const latestOrder = {};
+const LATEST_ORDER = {};
 
 // Lock loop execution while we're working on an order
 let LOCK_LOOP = false;
+
+/**
+ * Previously we were just unlocking the loop but LATEST_ORDER was stale.
+ * So we were either left stuck on a lowball buy
+ * Or executing a bad order.
+ * 
+ * This way, we delay our loop a bit b/c we have to find a new pair,
+ * but we guarantee that we're only executing good opportunities.
+ */
+function RESET_LOOP() {
+  LOCK_LOOP = false;
+  LATEST_ORDER = {};
+};
 
 const client = new ws('wss://stream.binance.us:9443/stream?streams=btcusd@bookTicker/btcbusd@bookTicker');
 client.on('message', msg => {
@@ -47,10 +60,10 @@ client.on('message', msg => {
   // b = highest bid price
   // B = bid qty
   const { s, a, A, b, B } = data.data;
-  latestOrder[s] = { a, A, b, B };
+  LATEST_ORDER[s] = { a, A, b, B };
 
   const oppositeSymbol = s === 'BTCUSD' ? 'BTCBUSD' : 'BTCUSD';
-  const latestOppositeOrder = latestOrder[oppositeSymbol];
+  const latestOppositeOrder = LATEST_ORDER[oppositeSymbol];
   if (!latestOppositeOrder) {
     LOCK_LOOP = false;
     return;
@@ -59,8 +72,8 @@ client.on('message', msg => {
   const
   askPrice = +a,
   bidPrice = +b,
-  oAskPrice = +(latestOrder[oppositeSymbol].a),
-  oBidPrice = +(latestOrder[oppositeSymbol].b);
+  oAskPrice = +(LATEST_ORDER[oppositeSymbol].a),
+  oBidPrice = +(LATEST_ORDER[oppositeSymbol].b);
 
   // we're buying the ask and selling the bed if their diff is > delta
   const
@@ -75,7 +88,7 @@ client.on('message', msg => {
     if (diffA > diffB) {
       const buyQty = Math.floor( USD_TRADE_QTY / askPrice * 10000 ) / 10000;
 
-      if ( buyQty * askPrice < MIN_USD_TRADE ) LOCK_LOOP = false;
+      if ( buyQty * askPrice < MIN_USD_TRADE ) RESET_LOOP();
       else {
         if (SHOW_LOGS) console.log(`Found abritrage: B=${askPrice}; S=${oBidPrice}`);
         executeArbitrage(s, askPrice, buyQty, oppositeSymbol, oBidPrice);
@@ -84,7 +97,7 @@ client.on('message', msg => {
     else {
       const buyQty = Math.floor( USD_TRADE_QTY / oAskPrice * 10000 ) / 10000;
 
-      if ( buyQty * oAskPrice < MIN_USD_TRADE ) LOCK_LOOP = false;
+      if ( buyQty * oAskPrice < MIN_USD_TRADE ) RESET_LOOP();
       else {
         if (SHOW_LOGS) console.log(`Found abritrage: B=${oAskPrice}; S=${bidPrice}`);
         executeArbitrage(oppositeSymbol, oAskPrice, buyQty, s, bidPrice);
@@ -195,7 +208,7 @@ function makeBinanceQueryString(q) {
       marketSell(sellSymbol, sellQty);
     }
     else {
-      LOCK_LOOP = false;
+      RESET_LOOP();
     }
     return [null, ];
   }
@@ -266,7 +279,7 @@ async function limitSell(symbol, quantity, price, numAttepts=MAX_ATTEMPTS) {
     const { orderId } = sellRes;
     trackSellOrder(quantity, symbol, orderId);
 
-    LOCK_LOOP = false;
+    RESET_LOOP();
   }
 }
 
@@ -346,7 +359,7 @@ async function marketSell(symbol, quantity) {
       console.log('> MARKET SELL');
     }
 
-    LOCK_LOOP = false;
+    RESET_LOOP();
     return [null, ];
   }
 }
@@ -398,7 +411,7 @@ async function r_request(endpoint, q, method) {
  * @param {*} e 
  */
 function handleError(data) {
-  LOCK_LOOP = false;
+  RESET_LOOP();
 
   if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Error! ${ JSON.stringify(data) }`);
 }
