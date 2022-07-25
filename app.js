@@ -375,11 +375,7 @@ async function getOrderStatus(symbol, orderId) {
   };
 
   const [e, res] = await r_request('/api/v3/order', q, 'GET');
-  if (e) {
-    if (SHOW_LOGS) console.log(e);
-    return [e];
-  }
-
+  if (e) return [e];
   return [null, res];
 }
 
