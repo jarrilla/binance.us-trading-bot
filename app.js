@@ -168,7 +168,7 @@ function makeBinanceQueryString(q) {
     timestamp: Date.now()
   };
 
-  if (SHOW_LOGS) console.log('> CANCELING');
+  if (SHOW_LOGS) console.log('> CANCELING ' + side);
   const [e, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
   if (e?.code === -2011) {
     
@@ -309,7 +309,10 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
   if (statusErr) return marketSell(symbol, quantity);
   const { status } = statusRes;
 
-  if (status === 'FILLED') return;
+  if (status === 'FILLED') {
+    if (SHOW_LOGS) console.log('> SOLD');
+    return;
+  }
   else {
 
     // if this is last attempt, just market sell
@@ -340,8 +343,7 @@ async function marketSell(symbol, quantity) {
   }
   else {
     if (SHOW_LOGS) {
-      console.log('MARKET SELL >');
-      console.log(r);
+      console.log('> MARKET SELL');
     }
 
     LOCK_LOOP = false;
