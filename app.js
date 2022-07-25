@@ -291,7 +291,7 @@ async function postSellOrder(symbol, quantity, price) {
     symbol,
     quantity,
     timestamp:    Date.now(),
-    recvWindow:   RECV_WINDOW_MS,
+    // recvWindow:   RECV_WINDOW_MS,
     timeInForce:  'GTC',
     newOrderRespType: 'RESULT'
   };
