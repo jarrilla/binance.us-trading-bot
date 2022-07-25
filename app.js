@@ -25,7 +25,7 @@ const RECV_WINDOW_MS = 150;
 const RETRY_DELAY_MS = 200
 
 // max attempts before giving up on order
-const MAX_ATTEMPTS = 25;
+const MAX_ATTEMPTS = 35;
 
 // Track latest price
 const latestOrder = {};
