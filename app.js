@@ -90,7 +90,7 @@ client.on('message', msg => {
 
       if ( buyQty * askPrice < MIN_USD_TRADE ) RESET_LOOP();
       else {
-        if (SHOW_LOGS) console.log(`Found abritrage: B=${askPrice}; S=${oBidPrice}`);
+        if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Found abritrage: B=${askPrice}; S=${oBidPrice}`);
         executeArbitrage(s, askPrice, buyQty, oppositeSymbol, oBidPrice);
       }
     }
@@ -99,7 +99,7 @@ client.on('message', msg => {
 
       if ( buyQty * oAskPrice < MIN_USD_TRADE ) RESET_LOOP();
       else {
-        if (SHOW_LOGS) console.log(`Found abritrage: B=${oAskPrice}; S=${bidPrice}`);
+        if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Found abritrage: B=${oAskPrice}; S=${bidPrice}`);
         executeArbitrage(oppositeSymbol, oAskPrice, buyQty, s, bidPrice);
       }
     }
@@ -134,7 +134,7 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
   }
   else {
     if (SHOW_LOGS) {
-      console.log(`> BOUGHT ${buyQty} @ ${buyPrice}`);
+      console.log(`${new Date().toISOString()} > BUYING ${buyQty} @ ${buyPrice}`);
     }
     sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
   }
@@ -181,11 +181,11 @@ function makeBinanceQueryString(q) {
     timestamp: Date.now()
   };
 
-  if (SHOW_LOGS) console.log('> CANCELING ' + side);
+  if (SHOW_LOGS) console.log(`${new Date().toISOString()} > CANCELING ${side}`);
   const [e, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
   if (e?.code === -2011) {
     
-    if (SHOW_LOGS) console.log('> CANCEL FAILED; ORDER FILLED');
+    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > CANCEL FAILED; ORDER FILLED`);
 
     // if BUY got filled, just market sell
     // TODO: we could actually still recover and potentially arbitrage here
@@ -196,7 +196,7 @@ function makeBinanceQueryString(q) {
     return [null, ];
   }
   else if (!e) {
-    if (SHOW_LOGS) console.log('> CANCELED');
+    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > CANCELED`);
 
     const { executedQty, origQty } = orderRes;
 
@@ -213,7 +213,7 @@ function makeBinanceQueryString(q) {
     return [null, ];
   }
   else {
-    if (SHOW_LOGS) console.log('> CANCEL FAILED; UNEXPECTED');
+    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > CANCEL FAILED; UNEXPECTED`);
 
     handleError(e);
     return [e];
@@ -231,9 +231,11 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
   const { orderId, executedQty, status } = orderRes;
 
   if (status === 'FILLED') {
+    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > BOUGHT`);
     return limitSell(sellSymbol, buyQtyPosted, sellPrice);
   }
   else if (status === 'PARTIALLY_FILLED' && (+(executedQty) >= (buyQtyPosted/2))) {
+    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > PARTIAL BOUGHT`);
     await limitSell(sellSymbol, executedQty, sellPrice);
 
     const mSellQty = (+buyQtyPosted - (+executedQty)).toFixed(2);
@@ -320,7 +322,7 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
   const { status } = statusRes;
 
   if (status === 'FILLED') {
-    if (SHOW_LOGS) console.log('> SOLD');
+    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > SOLD`);
     return;
   }
   else {
@@ -353,7 +355,7 @@ async function marketSell(symbol, quantity) {
   }
   else {
     if (SHOW_LOGS) {
-      console.log('> MARKET SELL');
+      console.log(`${new Date().toISOString()} > MARKET SELL`);
     }
 
     RESET_LOOP();
