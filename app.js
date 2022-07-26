@@ -183,6 +183,7 @@ function makeBinanceQueryString(q) {
       marketSell(sellSymbol, buyQty);
     }
 
+    RESET_LOOP();
     return [null, ];
   }
   else if (!e) {
@@ -261,7 +262,7 @@ async function limitSell(symbol, quantity, price, numAttepts=MAX_ATTEMPTS) {
     const { orderId } = sellRes;
     trackSellOrder(quantity, symbol, orderId);
 
-    RESET_LOOP();
+    // RESET_LOOP();
   }
 }
 
@@ -302,6 +303,7 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
   const { status } = statusRes;
 
   if (status === 'FILLED') {
+    RESET_LOOP();
     return;
   }
   else {
@@ -327,15 +329,11 @@ async function marketSell(symbol, quantity) {
     timestamp: Date.now(),
   };
 
-  const [e, r] = await r_request('/api/v3/order', q, 'POST');
-  if (e) {
-    handleError(e);
-    return [e];
-  }
-  else {
-    RESET_LOOP();
-    return [null, ];
-  }
+  // TODO: really we should re-try here...
+  // otherwise we keep accumulating
+  const [e, ] = await r_request('/api/v3/order', q, 'POST');
+  if (e) handleError(e);
+  else RESET_LOOP();
 }
 
 /**
