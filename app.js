@@ -276,7 +276,7 @@ async function limitSell(symbol, quantity, price, numAttepts=MAX_ATTEMPTS) {
   }
   else {
     if (SHOW_LOGS) {
-      console.log(`> SELLING ${quantity} @ ${price}`);
+      console.log(`${new Date().toISOString()} > SELLING ${quantity} @ ${price}`);
     }
 
     const { orderId } = sellRes;
