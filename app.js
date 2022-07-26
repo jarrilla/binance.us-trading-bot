@@ -136,7 +136,8 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
     if (SHOW_LOGS) {
       console.log(`${new Date().toISOString()} > BUYING ${buyQty} @ ${buyPrice}`);
     }
-    sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
+    // sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
+    sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
   }
 }
 
