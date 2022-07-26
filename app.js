@@ -3,9 +3,6 @@ const crypto = require('crypto');
 const ws = require('ws');
 const { request } = require('undici');
 
-// show logs if debugging
-const SHOW_LOGS = true;
-
 // The minimum delta to look for between market 1's lowest ask and market 2's highest bid.
 // If we spot a window with this delta, execute an arbitrage.
 const TARGET_DELTA = +0.25;
@@ -90,7 +87,6 @@ client.on('message', msg => {
 
       if ( buyQty * askPrice < MIN_USD_TRADE ) RESET_LOOP();
       else {
-        if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Found abritrage: B=${askPrice}; S=${oBidPrice}`);
         executeArbitrage(s, askPrice, buyQty, oppositeSymbol, oBidPrice);
       }
     }
@@ -99,7 +95,6 @@ client.on('message', msg => {
 
       if ( buyQty * oAskPrice < MIN_USD_TRADE ) RESET_LOOP();
       else {
-        if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Found abritrage: B=${oAskPrice}; S=${bidPrice}`);
         executeArbitrage(oppositeSymbol, oAskPrice, buyQty, s, bidPrice);
       }
     }
@@ -133,9 +128,6 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
     return [e];
   }
   else {
-    if (SHOW_LOGS) {
-      console.log(`${new Date().toISOString()} > BUYING ${buyQty} @ ${buyPrice}`);
-    }
     // sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
     sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
   }
@@ -182,11 +174,8 @@ function makeBinanceQueryString(q) {
     timestamp: Date.now()
   };
 
-  if (SHOW_LOGS) console.log(`${new Date().toISOString()} > CANCELING ${side}`);
   const [e, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
   if (e?.code === -2011) {
-    
-    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > CANCEL FAILED; ORDER FILLED`);
 
     // if BUY got filled, just market sell
     // TODO: we could actually still recover and potentially arbitrage here
@@ -197,8 +186,6 @@ function makeBinanceQueryString(q) {
     return [null, ];
   }
   else if (!e) {
-    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > CANCELED`);
-
     const { executedQty, origQty } = orderRes;
 
     let sellQty;
@@ -214,8 +201,6 @@ function makeBinanceQueryString(q) {
     return [null, ];
   }
   else {
-    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > CANCEL FAILED; UNEXPECTED`);
-
     handleError(e);
     return [e];
   }
@@ -232,11 +217,9 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
   const { orderId, executedQty, status } = orderRes;
 
   if (status === 'FILLED') {
-    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > BOUGHT`);
     return limitSell(sellSymbol, buyQtyPosted, sellPrice);
   }
   else if (status === 'PARTIALLY_FILLED' && (+(executedQty) >= (buyQtyPosted/2))) {
-    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > PARTIAL BOUGHT`);
     await limitSell(sellSymbol, executedQty, sellPrice);
 
     const mSellQty = (+buyQtyPosted - (+executedQty)).toFixed(2);
@@ -275,10 +258,6 @@ async function limitSell(symbol, quantity, price, numAttepts=MAX_ATTEMPTS) {
     else handleError(sellErr);
   }
   else {
-    if (SHOW_LOGS) {
-      console.log(`${new Date().toISOString()} > SELLING ${quantity} @ ${price}`);
-    }
-
     const { orderId } = sellRes;
     trackSellOrder(quantity, symbol, orderId);
 
@@ -323,7 +302,6 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
   const { status } = statusRes;
 
   if (status === 'FILLED') {
-    if (SHOW_LOGS) console.log(`${new Date().toISOString()} > SOLD`);
     return;
   }
   else {
@@ -355,10 +333,6 @@ async function marketSell(symbol, quantity) {
     return [e];
   }
   else {
-    if (SHOW_LOGS) {
-      console.log(`${new Date().toISOString()} > MARKET SELL`);
-    }
-
     RESET_LOOP();
     return [null, ];
   }
@@ -408,6 +382,4 @@ async function r_request(endpoint, q, method) {
  */
 function handleError(data) {
   RESET_LOOP();
-
-  if (SHOW_LOGS) console.log(`${new Date().toISOString()} > Error! ${ JSON.stringify(data) }`);
 }
