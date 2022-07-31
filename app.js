@@ -16,13 +16,13 @@ const MIN_USD_TRADE = 10;
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 25;
+const RECV_WINDOW_MS = 100;
 
 // delay before retrying a sell attempt
-const RETRY_DELAY_MS = 100
+const RETRY_DELAY_MS = 250;
 
 // max attempts before giving up on order
-const MAX_ATTEMPTS = 35;
+const MAX_ATTEMPTS = 20;
 
 // Track latest price
 let LATEST_ORDER = {};
@@ -47,6 +47,7 @@ const client = new ws('wss://stream.binance.us:9443/stream?streams=btcusd@bookTi
 client.on('message', msg => {
   if (LOCK_LOOP === true) return;
 
+  // lock loop right away
   LOCK_LOOP = true;
 
   const data = JSON.parse(msg);
@@ -57,7 +58,12 @@ client.on('message', msg => {
   // b = highest bid price
   // B = bid qty
   const { s, a, A, b, B } = data.data;
-  LATEST_ORDER[s] = { a, A, b, B };
+  LATEST_ORDER[s] = {
+    a: +a,
+    A: +A,
+    b: +b,
+    B: +B
+  };
 
   const oppositeSymbol = s === 'BTCUSD' ? 'BTCBUSD' : 'BTCUSD';
   const latestOppositeOrder = LATEST_ORDER[oppositeSymbol];
@@ -69,8 +75,8 @@ client.on('message', msg => {
   const
   askPrice = +a,
   bidPrice = +b,
-  oAskPrice = +(LATEST_ORDER[oppositeSymbol].a),
-  oBidPrice = +(LATEST_ORDER[oppositeSymbol].b);
+  oAskPrice = LATEST_ORDER[oppositeSymbol].a,
+  oBidPrice = LATEST_ORDER[oppositeSymbol].b;
 
   // we're buying the ask and selling the bed if their diff is > delta
   const
@@ -103,30 +109,32 @@ client.on('message', msg => {
 });
 
 /**
- * BUY low SELL high
+ * Attempt to buy LOW and sell HIGH.
+ * If buy fails, just reset the loop.
+ * 
+ * Otherwise, move on to sell.
+ * 
  * @param {String} buySymbol 
- * @param {Number | String} buyPrice 
+ * @param {Number} buyPrice 
+ * @param {Number} buyQty
  * @param {String} sellSymbol 
+ * @param {Number} sellPrice
  */
 async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPrice) {
 
   const q = {
-    side:         'BUY',
-    type:         'LIMIT',
-    price:        buyPrice,
-    symbol:       buySymbol,
-    quantity:     buyQty,
-    timestamp:    Date.now(),
-    recvWindow:   RECV_WINDOW_MS,
-    timeInForce:  'GTC',
+    side:             'BUY',
+    type:             'LIMIT',
+    price:            buyPrice,
+    symbol:           buySymbol,
+    quantity:         buyQty,
+    recvWindow:       RECV_WINDOW_MS,
+    timeInForce:      'GTC',
     newOrderRespType: 'RESULT'
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
-  if (e) {
-    handleError(e);
-    return [e];
-  }
+  if (e) handleGenericAPIError(e);
   else {
     // sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
     sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
@@ -166,48 +174,64 @@ function makeBinanceQueryString(q) {
   buySymbol,
   sellSymbol,
   side,
-  buyQty
+  buyQty,
+  numAttemptsLeft=MAX_ATTEMPTS
 ) {
   const q = {
     symbol: buySymbol,
     orderId,
-    timestamp: Date.now()
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
-  if (e?.code === -2011) {
 
-    // if BUY got filled, just market sell
-    // TODO: we could actually still recover and potentially arbitrage here
+  // If buy got filled, just market sell
+  // TODO: look at API specs and see if a -2011 error code gives us an executedQty
+  // we could recover if that's the case
+  if (e?.code === -2011) {
     if (side === 'BUY') {
-      marketSell(sellSymbol, buyQty);
+      postMarketSell(sellSymbol, buyQty);
     }
 
     RESET_LOOP();
-    return [null, ];
   }
   else if (!e) {
     const { executedQty, origQty } = orderRes;
 
-    let sellQty;
-    if (side === 'BUY') sellQty = executedQty;
-    else sellQty = Math.floor( (Number(origQty) - Number(executedQty)) * 10000 ) / 10000;
+    const sellQty = (side === 'BUY') ?
+      Number(executedQty) :
+      Math.floor( (Number(origQty) - Number(executedQty)) * 10000 ) / 10000;
 
-    if (sellQty != 0) {
-      marketSell(sellSymbol, sellQty);
-    }
-    else {
-      RESET_LOOP();
-    }
-    return [null, ];
+    if (sellQty !== 0) postMarketSell(sellSymbol, sellQty);
+    else RESET_LOOP();
   }
   else {
-    handleError(e);
-    return [e];
+    handleGenericAPIError(
+      e,
+      numAttemptsLeft > 0 ? 
+        () => cancelAndMarketSell(orderId, buySymbol, sellSymbol, side, buyQty, numAttemptsLeft-1) :
+        undefined
+    );
   }
 }
 
-async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orderRes, numAttepts=MAX_ATTEMPTS) {
+/**
+ * 
+ * @param {String} buySymbol Symbol to buy
+ * @param {Number} buyQtyPosted Quantity to buy
+ * @param {String} sellSymbol Symbol to sell
+ * @param {Number} sellPrice Price to sell at
+ * @param {Object} buyOrderRes Result from buy order after latest check
+ * @param {Number?} numAttepts Number of attempts remaining
+ * @returns 
+ */
+async function sellAfterBuy(
+  buySymbol,
+  buyQtyPosted,
+  sellSymbol,
+  sellPrice,
+  buyOrderRes,
+  numAtteptsLeft=MAX_ATTEMPTS
+) {
   // check if the order was executed for up to 2s after posting.
   // if 50% or more executed, sell
   // otherwise, just cancel and keep going
@@ -215,31 +239,45 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
   // so a market sell guarantees that we make money
   // in the case that a bid gets sniped, we should lose a lot less than if we leave the order hanging
 
-  const { orderId, executedQty, status } = orderRes;
+  const { orderId, executedQty, status } = buyOrderRes;
+  const n_executedQty = Number(executedQty);
 
   if (status === 'FILLED') {
     return limitSell(sellSymbol, buyQtyPosted, sellPrice);
   }
-  else if (status === 'PARTIALLY_FILLED' && (+(executedQty) >= (buyQtyPosted/2))) {
+  else if (status === 'PARTIALLY_FILLED' && (n_executedQty >= (buyQtyPosted/2))) {
     await limitSell(sellSymbol, executedQty, sellPrice);
 
-    const mSellQty = (+buyQtyPosted - (+executedQty)).toFixed(2);
-    return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', mSellQty);
+    const marketSellQty = (buyQtyPosted - n_executedQty).toFixed(2);
+    return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', marketSellQty);
   }
   else if (numAttepts === 0) {
-    return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', executedQty);
+    return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', n_executedQty);
   }
 
   const [statusErr, statusRes] = await getOrderStatus(buySymbol, orderId);
+
+  // We really want this sell to go through...
+  // If there's an error, try again
   if (statusErr) {
-    handleError(statusErr);
-    return [statusErr];
+    handleGenericAPIError(
+      statusErr,
+      () => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, buyOrderRes)
+    );
   }
 
-  setTimeout(
-    () => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, statusRes, numAttepts-1),
-    RETRY_DELAY_MS
-  );
+  // Otherwise, if the order is filled, post a sell right away
+  else if (statusRes?.status === 'FILLED') {
+    return limitSell(sellSymbol, buyQtyPosted, sellPrice);
+  }
+
+  // In all other cases, just recurse with -1 attempt left
+  else {
+    setTimeout(
+      () => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, statusRes, numAtteptsLeft-1),
+      RETRY_DELAY_MS
+    );
+  }
 }
 
 /**
@@ -253,30 +291,38 @@ async function sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, orde
  * @returns 
  */
 async function limitSell(symbol, quantity, price, numAttepts=MAX_ATTEMPTS) {
-  const [sellErr, sellRes] = await postSellOrder(symbol, quantity, price);
+  const [sellErr, sellRes] = await postLimitSell(symbol, quantity, price);
   if (sellErr) {
-    if (numAttepts > 0) setTimeout(() => limitSell(symbol, quantity, price, numAttepts-1), RETRY_DELAY_MS);
-    else handleError(sellErr);
+    handleGenericAPIError(
+      sellErr,
+      numAttepts > 0 ?
+        () => limitSell(symbol, quantity, price, numAttepts-1) :
+        () => postMarketSell(symbol, quantity)
+    );
   }
   else {
     const { orderId } = sellRes;
     trackSellOrder(quantity, symbol, orderId);
-
-    // RESET_LOOP();
   }
 }
 
-async function postSellOrder(symbol, quantity, price) {
+/**
+ * Attempt to post a sell order.
+ * Try up to MAX_ATTEMPTS before reporting an error.
+ * 
+ * @param {Strin} symbol Symbol to sell
+ * @param {Number} quantity Quantity to sell
+ * @param {Number} price Price to sell at
+ */
+async function postLimitSell(symbol, quantity, price) {
   const q = {
     side:         'SELL',
     type:         'LIMIT',
     price,
     symbol,
     quantity,
-    timestamp:    Date.now(),
-    // recvWindow:   RECV_WINDOW_MS,
     timeInForce:  'GTC',
-    newOrderRespType: 'RESULT'
+    // newOrderRespType: 'RESULT'
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
@@ -298,18 +344,20 @@ async function postSellOrder(symbol, quantity, price) {
  */
 async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS) {
   const [statusErr, statusRes] = await getOrderStatus(symbol, orderId);
-
-  if (statusErr) return marketSell(symbol, quantity);
-  const { status } = statusRes;
-
-  if (status === 'FILLED') {
+  if (statusErr) {
+    handleGenericAPIError(
+      statusErr,
+      numAttepts > 0 ?
+        () => trackSellOrder(quantity, symbol, orderId, numAttepts-1) :
+        () => postMarketSell(symbol, quantity)
+    );
+  }
+  else if (statusRes?.status === 'FILLED') {
     RESET_LOOP();
-    return;
   }
   else {
-
     // if this is last attempt, just market sell
-    if (numAttepts === 0) cancelAndMarketSell(orderId, symbol, symbol, 'SELL');
+    if (numAttepts <= 0) cancelAndMarketSell(orderId, symbol, symbol, 'SELL');
     else setTimeout(() => trackSellOrder(quantity, symbol, orderId, numAttepts-1), RETRY_DELAY_MS);
   }
 }
@@ -317,23 +365,26 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
 /**
  * Post a market sell for the specified (symbol, quantity)
  * @param {String} symbol 
- * @param {Number | String} quantity 
+ * @param {Number} quantity 
  */
-async function marketSell(symbol, quantity) {
+async function postMarketSell(symbol, quantity, numAttemptsLeft=MAX_ATTEMPTS) {
 
   const q = {
     type: 'MARKET',
     side: 'SELL',
     symbol,
     quantity,
-    timestamp: Date.now(),
   };
 
-  // TODO: really we should re-try here...
-  // otherwise we keep accumulating
   const [e, ] = await r_request('/api/v3/order', q, 'POST');
-  if (e) handleError(e);
-  else RESET_LOOP();
+  if (e) {
+    handleGenericAPIError(
+      e,
+      numAttemptsLeft > 0 ?
+        () => postMarketSell(symbol, quantity, numAttemptsLeft-1) :
+        undefined
+    );
+  }
 }
 
 /**
@@ -346,7 +397,6 @@ async function getOrderStatus(symbol, orderId) {
   const q = {
     symbol,
     orderId,
-    timestamp: Date.now()
   };
 
   const [e, res] = await r_request('/api/v3/order', q, 'GET');
@@ -358,6 +408,7 @@ async function getOrderStatus(symbol, orderId) {
  * Robust function to call the ubinci request method.
  */
 async function r_request(endpoint, q, method) {
+  q.timestamp = Date.now();
   const query = makeBinanceQueryString(q);
   
   const res = await request(`https://api.binance.us${endpoint}?${query}`, {
@@ -368,16 +419,47 @@ async function r_request(endpoint, q, method) {
   });
 
   const data = await res.body.json();
+  const { statusCode, headers } = res;
+  const ret = { statusCode, headers, ...data };
 
-  if (res.statusCode != 200) return [data];
-  else return [null, data];
+  if (statusCode != 200) return [ret];
+  else return [null, ret];
 }
 
 /**
- * Generic error handler.
- * Just print and keep going.
- * @param {*} e 
+ * 
+ * @param {*} error Error to parse
+ * @param {Function?} retryCallback Optional retry-callback to execute
  */
-function handleError(data) {
-  RESET_LOOP();
+function handleGenericAPIError(
+  error,
+  retryCallback=undefined
+) {
+  const { status, headers } = error;
+
+  if (status === 403) {
+    process.exit(1);
+  }
+  else if (status === 429 || status === 418) {
+    const secsToWait = error.headers['Retry-After'];
+    setTimeout(retryCallback || RESET_LOOP, secsToWait*1000);
+  }
+  else if (status !== 400 && status < 500) {
+    console.log('Unknown client error.');
+    console.log({ status, headers });
+    process.exit(2);
+  }
+  else {
+    const { code, msg } = error;
+    const errorsToRetry = [-1000, -1006, -1007, -1021];
+    
+    if (errorsToRetry.includes(code)) {
+      console.log(msg);
+      setTimeout( retryCallback || RESET_LOOP, RETRY_DELAY_MS );
+    }
+    else {
+      console.log({ code, msg });
+      process.exit(-1 * code);
+    }
+  }
 }
