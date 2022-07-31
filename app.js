@@ -9,20 +9,20 @@ const TARGET_DELTA = +0.25;
 
 // minimum trade qty that binance lets us trade
 // anything less and it'll be rejected & thus waste of API call
-const MIN_USD_TRADE = 10;
+const MIN_USD_TRADE = 11;
 
 // The amount to trade
 // Use a fixed quantity to avoid exponential growth
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 100;
+const RECV_WINDOW_MS = 25;
 
 // delay before retrying a sell attempt
-const RETRY_DELAY_MS = 250;
+const RETRY_DELAY_MS = 200;
 
 // max attempts before giving up on order
-const MAX_ATTEMPTS = 20;
+const MAX_ATTEMPTS = 25;
 
 // Track latest price
 let LATEST_ORDER = {};
