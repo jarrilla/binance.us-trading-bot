@@ -39,6 +39,8 @@ let LOCK_LOOP = false;
  * but we guarantee that we're only executing good opportunities.
  */
 function RESET_LOOP() {
+  console.log('Resetting loop...');
+
   LOCK_LOOP = false;
   LATEST_ORDER = {};
 };
@@ -221,7 +223,7 @@ function makeBinanceQueryString(q) {
  * @param {String} sellSymbol Symbol to sell
  * @param {Number} sellPrice Price to sell at
  * @param {Object} buyOrderRes Result from buy order after latest check
- * @param {Number?} numAttepts Number of attempts remaining
+ * @param {Number?} numAttemptsLeft Number of attempts remaining
  * @returns 
  */
 async function sellAfterBuy(
@@ -230,7 +232,7 @@ async function sellAfterBuy(
   sellSymbol,
   sellPrice,
   buyOrderRes,
-  numAtteptsLeft=MAX_ATTEMPTS
+  numAttemptsLeft=MAX_ATTEMPTS
 ) {
   // check if the order was executed for up to 2s after posting.
   // if 50% or more executed, sell
@@ -251,7 +253,7 @@ async function sellAfterBuy(
     const marketSellQty = (buyQtyPosted - n_executedQty).toFixed(2);
     return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', marketSellQty);
   }
-  else if (numAttepts === 0) {
+  else if (numAttemptsLeft === 0) {
     return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', n_executedQty);
   }
 
@@ -274,7 +276,7 @@ async function sellAfterBuy(
   // In all other cases, just recurse with -1 attempt left
   else {
     setTimeout(
-      () => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, statusRes, numAtteptsLeft-1),
+      () => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, statusRes, numAttemptsLeft-1),
       RETRY_DELAY_MS
     );
   }
@@ -290,13 +292,13 @@ async function sellAfterBuy(
  * @param {String | Number} price 
  * @returns 
  */
-async function limitSell(symbol, quantity, price, numAttepts=MAX_ATTEMPTS) {
+async function limitSell(symbol, quantity, price, numAttemptsLeft=MAX_ATTEMPTS) {
   const [sellErr, sellRes] = await postLimitSell(symbol, quantity, price);
   if (sellErr) {
     handleGenericAPIError(
       sellErr,
-      numAttepts > 0 ?
-        () => limitSell(symbol, quantity, price, numAttepts-1) :
+      numAttemptsLeft > 0 ?
+        () => limitSell(symbol, quantity, price, numAttemptsLeft-1) :
         () => postMarketSell(symbol, quantity)
     );
   }
@@ -339,16 +341,16 @@ async function postLimitSell(symbol, quantity, price) {
  * @param {String | Number} quantity 
  * @param {String} symbol 
  * @param {String} orderId 
- * @param {Number?} numAttepts 
+ * @param {Number?} numAttemptsLeft 
  * @returns 
  */
-async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS) {
+async function trackSellOrder(quantity, symbol, orderId, numAttemptsLeft=MAX_ATTEMPTS) {
   const [statusErr, statusRes] = await getOrderStatus(symbol, orderId);
   if (statusErr) {
     handleGenericAPIError(
       statusErr,
-      numAttepts > 0 ?
-        () => trackSellOrder(quantity, symbol, orderId, numAttepts-1) :
+      numAttemptsLeft > 0 ?
+        () => trackSellOrder(quantity, symbol, orderId, numAttemptsLeft-1) :
         () => postMarketSell(symbol, quantity)
     );
   }
@@ -357,8 +359,8 @@ async function trackSellOrder(quantity, symbol, orderId, numAttepts=MAX_ATTEMPTS
   }
   else {
     // if this is last attempt, just market sell
-    if (numAttepts <= 0) cancelAndMarketSell(orderId, symbol, symbol, 'SELL');
-    else setTimeout(() => trackSellOrder(quantity, symbol, orderId, numAttepts-1), RETRY_DELAY_MS);
+    if (numAttemptsLeft <= 0) cancelAndMarketSell(orderId, symbol, symbol, 'SELL');
+    else setTimeout(() => trackSellOrder(quantity, symbol, orderId, numAttemptsLeft-1), RETRY_DELAY_MS);
   }
 }
 
@@ -438,6 +440,8 @@ function handleGenericAPIError(
   const { status, headers } = error;
 
   if (status === 403) {
+    console.log('Firewall Error.');
+    console.log({ status, headers });
     process.exit(1);
   }
   else if (status === 429 || status === 418) {
@@ -452,14 +456,19 @@ function handleGenericAPIError(
   else {
     const { code, msg } = error;
     const errorsToRetry = [-1000, -1006, -1007, -1021];
+    const errorsToReset = [-2010];
     
     if (errorsToRetry.includes(code)) {
       console.log(msg);
       setTimeout( retryCallback || RESET_LOOP, RETRY_DELAY_MS );
     }
+    else if (errorsToReset.includes(code)) {
+      console.log(msg);
+      RESET_LOOP();
+    }
     else {
-      console.log({ code, msg });
-      process.exit(-1 * code);
+      console.log({ code, msg, status });
+      process.exit(code);
     }
   }
 }
