@@ -387,6 +387,7 @@ async function postMarketSell(symbol, quantity, numAttemptsLeft=MAX_ATTEMPTS) {
         undefined
     );
   }
+  else RESET_LOOP();
 }
 
 /**
