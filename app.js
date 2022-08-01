@@ -455,8 +455,9 @@ function handleGenericAPIError(
   }
   else {
     const { code, msg } = error;
-    const errorsToRetry = [-1000, -1006, -1007, -1013, -1021];
-    const errorsToReset = [-2010];
+    const errorsToRetry = [ -1000, -1006, -1007, -1013, -1021 ];
+    const errorsToReset = [ -2010, -2013 ];
+    // const errorsToIgnore = [ -2013 ];
     
     if (errorsToRetry.includes(code)) {
       console.log(msg);
