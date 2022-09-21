@@ -3,6 +3,11 @@ const crypto = require('crypto');
 const ws = require('ws');
 const { request } = require('undici');
 
+const ERRORS = {
+  CANCEL_REJECTED: -2011,
+  NO_SUCH_ORDER: -2013,
+};
+
 // The minimum delta to look for between market 1's lowest ask and market 2's highest bid.
 // If we spot a window with this delta, execute an arbitrage.
 const TARGET_DELTA = +0.25;
@@ -16,7 +21,7 @@ const MIN_USD_TRADE = 11;
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 30;
+const RECV_WINDOW_MS = 100;
 
 // delay before retrying a sell attempt
 const RETRY_DELAY_MS = 200;
@@ -136,7 +141,9 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
-  if (e) handleGenericAPIError(e);
+  if (e) {
+    handleGenericAPIError(e);
+  }
   else {
     // sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
     sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
@@ -165,6 +172,45 @@ function makeBinanceQueryString(q) {
 
   const ret = preSigQuery + '&signature=' + signature;
   return ret;
+}
+
+/**
+ * Attempt to cancel buy after time out
+ * @param {*} orderId Order to cancel
+ * @param {*} buySymbol 
+ * @param {*} buyQty Qty to sell in case cancel fails
+ * @param {*} sellSymbol 
+ * @param {*} sellPrice Price to sell at if cancel fails
+ * @param {*} numAttemptsLeft 
+ */
+async function cancelBuy(
+  orderId,
+  buySymbol,
+  buyQty,
+  sellSymbol,
+  sellPrice,
+  // numAttemptsLeft=MAX_ATTEMPTS
+) {
+  const q = {
+    symbol: buySymbol,
+    orderId
+  };
+
+  const [err, orderRes] = await r_request('/api/v3/order', q, 'DELETE');
+  if (err) {
+    const { code } = err;
+    if (code === ERRORS.CANCEL_REJECTED) {
+      sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
+    }
+    else if (code === ERRORS.NO_SUCH_ORDER) {
+      // couldn't find order -- not sure why this happens sometimes
+      // only option is to market sell
+      postMarketSell(sellSymbol, buyQty);
+    }
+  }
+  else {
+    RESET_LOOP();
+  }
 }
 
 /**
@@ -262,6 +308,14 @@ async function sellAfterBuy(
   // We really want this sell to go through...
   // If there's an error, try again
   if (statusErr) {
+
+    if (
+      statusErr === ERRORS.CANCEL_REJECTED ||
+      statusErr === ERRORS.NO_SUCH_ORDER
+    ) {
+      return cancelBuy(orderId, buySymbol, buyQtyPosted, sellSymbol, sellPrice);
+    }
+
     handleGenericAPIError(
       statusErr,
       () => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, buyOrderRes)
@@ -457,7 +511,7 @@ function handleGenericAPIError(
   else {
     const { code, msg } = error;
     const errorsToRetry = [ -1000, -1006, -1007, -1013, -1021 ];
-    const errorsToReset = [ -2010, -2013 ];
+    const errorsToReset = [ -2010, -2011, -2013 ];
     // const errorsToIgnore = [ -2013 ];
     
     if (errorsToRetry.includes(code)) {
