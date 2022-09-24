@@ -145,8 +145,8 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
     handleGenericAPIError(e);
   }
   else {
-    // sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
-    sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
+    sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
+    // sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
   }
 }
 
@@ -278,7 +278,6 @@ async function sellAfterBuy(
   sellSymbol,
   sellPrice,
   buyOrderRes,
-  numAttemptsLeft=MAX_ATTEMPTS
 ) {
   // check if the order was executed for up to 2s after posting.
   // if 50% or more executed, sell
@@ -299,40 +298,8 @@ async function sellAfterBuy(
     const marketSellQty = (buyQtyPosted - n_executedQty).toFixed(2);
     return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', marketSellQty);
   }
-  else if (numAttemptsLeft === 0) {
-    return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', n_executedQty);
-  }
-
-  const [statusErr, statusRes] = await getOrderStatus(buySymbol, orderId);
-
-  // We really want this sell to go through...
-  // If there's an error, try again
-  if (statusErr) {
-
-    if (
-      statusErr === ERRORS.CANCEL_REJECTED ||
-      statusErr === ERRORS.NO_SUCH_ORDER
-    ) {
-      return cancelBuy(orderId, buySymbol, buyQtyPosted, sellSymbol, sellPrice);
-    }
-
-    handleGenericAPIError(
-      statusErr,
-      () => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, buyOrderRes)
-    );
-  }
-
-  // Otherwise, if the order is filled, post a sell right away
-  else if (statusRes?.status === 'FILLED') {
-    return limitSell(sellSymbol, buyQtyPosted, sellPrice);
-  }
-
-  // In all other cases, just recurse with -1 attempt left
   else {
-    setTimeout(
-      () => sellAfterBuy(buySymbol, buyQtyPosted, sellSymbol, sellPrice, statusRes, numAttemptsLeft-1),
-      RETRY_DELAY_MS
-    );
+    cancelBuy(orderId, buySymbol, buyQtyPosted, sellSymbol, sellPrice);
   }
 }
 
@@ -378,7 +345,6 @@ async function postLimitSell(symbol, quantity, price) {
     symbol,
     quantity,
     timeInForce:  'GTC',
-    // newOrderRespType: 'RESULT'
   };
 
   const [e, orderRes] = await r_request('/api/v3/order', q, 'POST');
