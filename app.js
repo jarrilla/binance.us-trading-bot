@@ -145,8 +145,10 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
     handleGenericAPIError(e);
   }
   else {
-    sellAfterBuy(buySymbol, buyQty, sellSymbol, (+buyPrice+TARGET_DELTA).toFixed(2), orderRes);
-    // sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
+    const _sellPrice = (+buyPrice+TARGET_DELTA).toFixed(2);
+
+    sellAfterBuy(buySymbol, buyQty, sellSymbol, _sellPrice, orderRes);
+    console.log(`BUY ${buySymbol} @ ${buyQty}. SELL @ ${_sellPrice}.`);
   }
 }
 
@@ -200,12 +202,14 @@ async function cancelBuy(
   if (err) {
     const { code } = err;
     if (code === ERRORS.CANCEL_REJECTED) {
+      console.log('CANCEL REJECTED - SELLING');
       sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
     }
     else if (code === ERRORS.NO_SUCH_ORDER) {
       // couldn't find order -- not sure why this happens sometimes
       // only option is to market sell
       postMarketSell(sellSymbol, buyQty);
+      console.log('UNKNOWN ORDER - MARKET SELL.');
     }
   }
   else {
@@ -290,15 +294,19 @@ async function sellAfterBuy(
   const n_executedQty = Number(executedQty);
 
   if (status === 'FILLED') {
+    console.log('BUY FILLED - SELLING.');
     return limitSell(sellSymbol, buyQtyPosted, sellPrice);
   }
   else if (status === 'PARTIALLY_FILLED' && (n_executedQty >= (buyQtyPosted/2))) {
+    console.log('BUY PARTIALLY FILLED - MARKET SELLING REST.');
+
     await limitSell(sellSymbol, executedQty, sellPrice);
 
     const marketSellQty = (buyQtyPosted - n_executedQty).toFixed(2);
     return cancelAndMarketSell(orderId, buySymbol, sellSymbol, 'BUY', marketSellQty);
   }
   else {
+    console.log('NO FILL - CANCEL.');
     cancelBuy(orderId, buySymbol, buyQtyPosted, sellSymbol, sellPrice);
   }
 }
