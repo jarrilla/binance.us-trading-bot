@@ -21,13 +21,13 @@ const MIN_USD_TRADE = 11;
 const USD_TRADE_QTY = 25;
 
 // The valid receive window for the request by binance us servers
-const RECV_WINDOW_MS = 100;
+const RECV_WINDOW_MS = 125;
 
 // delay before retrying a sell attempt
-const RETRY_DELAY_MS = 200;
+const RETRY_DELAY_MS = 250;
 
 // max attempts before giving up on order
-const MAX_ATTEMPTS = 25;
+const MAX_ATTEMPTS = 32;
 
 // Track latest price
 let LATEST_ORDER = {};
@@ -129,6 +129,8 @@ client.on('message', msg => {
  */
 async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPrice) {
 
+  console.log(`BUY ${buyQty} ${buySymbol} @ ${buyPrice}. SELL @ ${sellPrice}.`);
+
   const q = {
     side:             'BUY',
     type:             'LIMIT',
@@ -148,7 +150,6 @@ async function executeArbitrage(buySymbol, buyPrice, buyQty, sellSymbol, sellPri
     const _sellPrice = (+buyPrice+TARGET_DELTA).toFixed(2);
 
     sellAfterBuy(buySymbol, buyQty, sellSymbol, _sellPrice, orderRes);
-    console.log(`BUY ${buySymbol} @ ${buyQty}. SELL @ ${_sellPrice}.`);
   }
 }
 
@@ -202,14 +203,25 @@ async function cancelBuy(
   if (err) {
     const { code } = err;
     if (code === ERRORS.CANCEL_REJECTED) {
+      console.log({ err, orderRes });
+
+      // seems like -2011 is unknown order sent
+      // instead of market selling we should considering pinging account to see how much BTC we have
+      // and limit selling it
+      
       console.log('CANCEL REJECTED - SELLING');
-      sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice, orderRes);
+
+      // sellAfterBuy(buySymbol, buyQty, sellSymbol, sellPrice);
+      postMarketSell(sellSymbol, buyQty);
     }
     else if (code === ERRORS.NO_SUCH_ORDER) {
       // couldn't find order -- not sure why this happens sometimes
       // only option is to market sell
-      postMarketSell(sellSymbol, buyQty);
       console.log('UNKNOWN ORDER - MARKET SELL.');
+
+      console.log({ err, orderRes });
+
+      postMarketSell(sellSymbol, buyQty);
     }
   }
   else {
@@ -281,7 +293,7 @@ async function sellAfterBuy(
   buyQtyPosted,
   sellSymbol,
   sellPrice,
-  buyOrderRes,
+  prevOrderRes = {},
 ) {
   // check if the order was executed for up to 2s after posting.
   // if 50% or more executed, sell
@@ -290,11 +302,12 @@ async function sellAfterBuy(
   // so a market sell guarantees that we make money
   // in the case that a bid gets sniped, we should lose a lot less than if we leave the order hanging
 
-  const { orderId, executedQty, status } = buyOrderRes;
-  const n_executedQty = Number(executedQty);
+  const { orderId, executedQty, status } = prevOrderRes;
+  const n_executedQty = Number(executedQty || 0);
 
   if (status === 'FILLED') {
     console.log('BUY FILLED - SELLING.');
+
     return limitSell(sellSymbol, buyQtyPosted, sellPrice);
   }
   else if (status === 'PARTIALLY_FILLED' && (n_executedQty >= (buyQtyPosted/2))) {
@@ -398,6 +411,8 @@ async function trackSellOrder(quantity, symbol, orderId, numAttemptsLeft=MAX_ATT
  * @param {Number} quantity 
  */
 async function postMarketSell(symbol, quantity, numAttemptsLeft=MAX_ATTEMPTS) {
+
+  console.log('MARKET SELLING - ');
 
   const q = {
     type: 'MARKET',
